@@ -18,9 +18,9 @@ from nibabel.processing import conform
 
 
 PREP_DATA_DIR = Path('/home/bruno-pacheco/brain-age/data/raw/ADNI_prep')
-DATASET_FPATH = Path('/home/bruno-pacheco/brain-age/data/interim/ADNI_slices_fix_2mm.hdf5')
+DATASET_FPATH = Path('/home/bruno-pacheco/brain-age/data/interim/ADNI_slices_fix_2mm_split.hdf5')
 
-SPLIT_CSV_FPATH = Path('/home/bruno-pacheco/brain-age/notebooks/dataframe2D-ADNI.csv')
+SPLIT_CSV_FPATH = Path('/home/bruno-pacheco/brain-age/notebooks/dataframe3D.csv')
 
 DOWNSIZE = True
 
@@ -76,32 +76,47 @@ if __name__ == '__main__':
     # split data
     df = pd.read_csv(SPLIT_CSV_FPATH)
     train_sids = df[df['split'] == 'train']['patient'].unique()
+    val_sids = df[df['split'] == 'val']['patient'].unique()
+    test_sids = df[df['split'] == 'test']['patient'].unique()
 
     train_fpaths_ = [list(PREP_DATA_DIR.glob(f"{sid[5:]}*.nii")) for sid in train_sids]
     train_fpaths = list()
     for fs in train_fpaths_:
-        train_fpaths += fs
+        train_fpaths += fs  # add all images from the subjects
     train_fpaths = sorted(train_fpaths)
 
-    test_fpaths = list(set(PREP_DATA_DIR.glob('*.nii')).difference(set(train_fpaths)))
+    val_fpaths_ = [list(PREP_DATA_DIR.glob(f"{sid[5:]}*.nii")) for sid in val_sids]
+    val_fpaths = list()
+    for fs in val_fpaths_:
+        val_fpaths += fs  # add all images from the subjects
+    val_fpaths = sorted(val_fpaths)
+
+    test_fpaths_ = [list(PREP_DATA_DIR.glob(f"{sid[5:]}*.nii")) for sid in test_sids]
+    test_fpaths = list()
+    for fs in test_fpaths_:
+        test_fpaths += fs  # add all images from the subjects
     test_fpaths = sorted(test_fpaths)
 
     i_train = 0
     i_test = 0
+    i_val = 0
 
     # create dataset
     if DATASET_FPATH.exists():
         # check if there's any progress already
         with h5py.File(DATASET_FPATH, 'r') as h:
             # overwrite the last image just to be sure
-            n_train = (h['train']['y'].shape[0] // target_shape[0]) - 1
-            n_test = (h['test']['y'].shape[0] // target_shape[0]) -1 
+            n_train = max((h['train']['y'].shape[0] // target_shape[0]) - 1,0)
+            n_test = max((h['test']['y'].shape[0] // target_shape[0]) -1,0)
+            n_val = max((h['val']['y'].shape[0] // target_shape[0]) -1,0)
 
         train_fpaths = train_fpaths[n_train-1:]
         test_fpaths = test_fpaths[n_test-1:]
+        val_fpaths = val_fpaths[n_val-1:]
 
         i_train = n_train * target_shape[0]
         i_test = n_test * target_shape[0]
+        i_val = n_val * target_shape[0]
     else:
         with h5py.File(DATASET_FPATH, 'w') as h:
             train = h.create_group('train')
@@ -114,6 +129,22 @@ if __name__ == '__main__':
                 compression='gzip',
             )
             y_train = train.create_dataset(
+                'y',
+                (0,),
+                maxshape=(None,),
+                dtype='uint8',
+            )
+
+            val = h.create_group('val')
+            X_val = val.create_dataset(
+                'X',
+                (0,target_shape[1],target_shape[2]),
+                maxshape=(None,target_shape[1],target_shape[2]),
+                dtype='float32',
+                chunks=(1,target_shape[1],target_shape[2]),
+                compression='gzip',
+            )
+            y_val = val.create_dataset(
                 'y',
                 (0,),
                 maxshape=(None,),
@@ -157,8 +188,8 @@ if __name__ == '__main__':
                     X = h[ds_name]['X']
                     y = h[ds_name]['y']
 
-                    X.resize(X.shape[0] + target_shape[0], axis=0)
-                    y.resize(y.shape[0] + target_shape[0], axis=0)
+                    X.resize(i + target_shape[0], axis=0)
+                    y.resize(i + target_shape[0], axis=0)
 
                     X[i:i+target_shape[0]] = brain[0]
                     y[i:i+target_shape[0]] = age
@@ -166,8 +197,11 @@ if __name__ == '__main__':
             else:
                 img_fpath.unlink()
 
-    print('Working on test images')
-    update_dataset(test_fpaths, i_test, 'test')
-
     print('Working on train images')
-    update_dataset(train_fpaths, i_train, 'train')
+    # update_dataset(train_fpaths, i_train, 'train')
+
+    print('Working on test images')
+    # update_dataset(test_fpaths, i_test, 'test')
+
+    print('Working on val images')
+    # update_dataset(val_fpaths, i_val, 'val')

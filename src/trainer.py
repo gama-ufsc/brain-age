@@ -17,8 +17,8 @@ from torch.utils.data import DataLoader, Dataset
 import wandb
 from dotenv import load_dotenv, find_dotenv
 
-from data import ADNIDatasetForBraTSModel
-from net import BraTSnnUNet
+from src.data import ADNIDatasetForBraTSModel
+from src.net import BraTSnnUNet
 
 
 # find .env automagically by walking up directories until it's found
@@ -225,13 +225,13 @@ class Trainer():
             transform=self.transforms,
         )
         transforms_ = transforms.ToTensor() if 'slices' in self.dataset_fpath.name else torch.Tensor
-        val_data = ADNIDatasetForBraTSModel(self.dataset_fpath, dataset='test', transform=self.transforms)
+        val_data = ADNIDatasetForBraTSModel(self.dataset_fpath, dataset='val', transform=self.transforms)
 
         # instantiate DataLoaders
         self._dataloader = {
             'train': DataLoader(train_data, batch_size=self.batch_size,
                                 shuffle=True),
-            'val': DataLoader(val_data, batch_size=self.batch_size),
+            'val': DataLoader(val_data, batch_size=40, shuffle=False),
         }
 
     def run(self):
@@ -250,7 +250,7 @@ class Trainer():
             self.l.info(f"Training loss = {train_loss}")
 
             # validation
-            val_time, (val_loss, val_MAE) = timeit(self.validation_pass)()
+            val_time, (val_loss, val_MAE, val_ps_MAE) = timeit(self.validation_pass)()
 
             self.l.info(f"Validation pass took {val_time:.3f} seconds")
             self.l.info(f"Validation loss = {val_loss}")
@@ -260,16 +260,17 @@ class Trainer():
                 "train_loss": train_loss,
                 "val_loss": val_loss,
                 "val_MAE": val_MAE,
+                "val_ps_MAE": val_ps_MAE,
             }, step=self._e, commit=True)
 
             self.l.info(f"Saving checkpoint")
             self.save_checkpoint()
 
-            if val_MAE < self.best_val:
+            if val_ps_MAE < self.best_val:
                 self.l.info(f"Saving best model")
                 self.save_model(name='model_best')
 
-                self.best_val = val_MAE
+                self.best_val = val_ps_MAE
 
             epoch_end_time = time()
             self.l.info(
@@ -326,6 +327,8 @@ class Trainer():
     def validation_pass(self):
         val_loss = 0
         val_MAE = 0
+        per_subject_AE = 0
+        n_subjects = 0
 
         self.net.eval()
         with torch.set_grad_enabled(False):
@@ -346,13 +349,16 @@ class Trainer():
                 val_loss += loss_value * len(y)  # scales to data size
 
                 val_MAE += (y_hat - y).abs().mean().item() * len(y)
+                per_subject_AE += (y_hat.median() - y.median()).abs().item()
+                n_subjects += 1
 
         # scale to data size
         len_data = len(self._dataloader['val'].dataset)
         val_loss = val_loss / len_data
         val_MAE = val_MAE / len_data
+        val_ps_MAE = per_subject_AE / n_subjects
 
-        return val_loss, val_MAE
+        return val_loss, val_MAE, val_ps_MAE
 
     def save_checkpoint(self):
         checkpoint = {
