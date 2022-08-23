@@ -5,6 +5,7 @@ import random
 
 from time import time
 from torchvision import transforms
+from scipy.stats import norm
 import numpy as np
 
 import torch
@@ -37,6 +38,49 @@ def timeit(fun):
         return end_time - start_time, f_ret
 
     return fun_
+
+def num2vect(x, bin_range, bin_step, sigma):
+    """
+    v,bin_centers = number2vector(x,bin_range,bin_step,sigma)
+    bin_range: (start, end), size-2 tuple
+    bin_step: should be a divisor of |end-start|
+    sigma:
+    = 0 for 'hard label', v is index
+    > 0 for 'soft label', v is vector
+    < 0 for error messages.
+    """
+    bin_start = bin_range[0]
+    bin_end = bin_range[1]
+    bin_length = bin_end - bin_start
+    if not bin_length % bin_step == 0:
+        print("bin's range should be divisible by bin_step!")
+        return -1
+    bin_number = int(bin_length / bin_step)
+    bin_centers = bin_start + float(bin_step) / 2 + bin_step * np.arange(bin_number)
+
+    if sigma == 0:
+        x = np.array(x)
+        i = np.floor((x - bin_start) / bin_step)
+        i = i.astype(int)
+        return i, bin_centers
+    elif sigma > 0:
+        if np.isscalar(x):
+            v = np.zeros((bin_number,))
+            for i in range(bin_number):
+                x1 = bin_centers[i] - float(bin_step) / 2
+                x2 = bin_centers[i] + float(bin_step) / 2
+                cdfs = norm.cdf([x1, x2], loc=x, scale=sigma)
+                v[i] = cdfs[1] - cdfs[0]
+            return v, bin_centers
+        else:
+            v = np.zeros((len(x), bin_number))
+            for j in range(len(x)):
+                for i in range(bin_number):
+                    x1 = bin_centers[i] - float(bin_step) / 2
+                    x2 = bin_centers[i] + float(bin_step) / 2
+                    cdfs = norm.cdf([x1, x2], loc=x[j], scale=sigma)
+                    v[j, i] = cdfs[1] - cdfs[0]
+            return v, bin_centers
 
 class Trainer():
     """Generic trainer for PyTorch NNs.
@@ -382,7 +426,7 @@ class Trainer():
 
 class ClassificationTrainer(Trainer):
     def __init__(self, net: nn.Module, dataset_fpath: Path, epochs=5, lr= 0.01,
-                 optimizer: str = 'Adam', loss_func: str = 'CrossEntropyLoss', h=lambda x: x,
+                 optimizer: str = 'Adam', loss_func: str = 'KLDivLoss', h=lambda x: x,
                  lr_scheduler: str = None, lr_scheduler_params: dict = None,
                  batch_size=16, device=None, transforms=transforms.ToTensor(),
                  wandb_project="ADNI-brain-age", logger=None,
@@ -391,20 +435,35 @@ class ClassificationTrainer(Trainer):
                          lr_scheduler, lr_scheduler_params, batch_size, device,
                          transforms, wandb_project, logger, random_seed)
 
+    def prep_label(self, y):
+        y = y.cpu().numpy()
+        y, self.bincenters = num2vect(y, (50,100), bin_step=1, sigma=1)
+        y = torch.Tensor(y)
+        
+        return y
+        
     def train_pass(self, scaler):
         train_loss = 0
         self.net.train()
         with torch.set_grad_enabled(True):
             for X, y in tqdm(self._dataloader['train']):
+                y = self.prep_label(y)
+
                 X = X.to(self.device)
                 y = y.to(self.device)
+
+                try:
+                    n = self.net.conv1.in_channels
+                    X = X.unsqueeze(1).repeat((1,n,1,1))  # fix input channels
+                except:
+                    pass
 
                 self._optim.zero_grad()
 
                 with autocast():
                     z = self.net(X)
 
-                    loss = self._loss_func(z, y.long() - 50)
+                    loss = self._loss_func(z, y)
 
                 scaler.scale(loss).backward()
 
@@ -424,25 +483,34 @@ class ClassificationTrainer(Trainer):
     def validation_pass(self):
         val_loss = 0
         val_MAE = 0
-
+        per_subject_AE = 0
+        n_subjects = 0
+        
         self.net.eval()
         with torch.set_grad_enabled(False):
             for X, y in self._dataloader['val']:
+                y = self.prep_label(y)
                 X = X.to(self.device)
                 y = y.to(self.device)
 
                 with autocast():
-                    z = self.net(X)
+                    y_hat = self.net(X)
 
-                    loss_value = self._loss_func(z, y.long() - 50).item()
+                    loss_value = self._loss_func(y_hat, y).item()
 
                 val_loss += loss_value * len(y)  # scales to data size
 
-                val_MAE += (z.max(1)[1].float() + 50. - y.float()).abs().mean().item() * len(y)
+                y_hat = y_hat.cpu().detach().numpy() @ self.bincenters
+                y = y.cpu().detach().numpy() @ self.bincenters
+                
+                val_MAE += np.abs(y_hat - y).mean() * len(y)
+                per_subject_AE += np.abs(np.median(y_hat) - np.median(y))
+                n_subjects += 1
 
         # scale to data size
         len_data = len(self._dataloader['val'].dataset)
         val_loss = val_loss / len_data
         val_MAE = val_MAE / len_data
+        val_ps_MAE = per_subject_AE / n_subjects
 
-        return val_loss, val_MAE
+        return val_loss, val_MAE, val_ps_MAE
