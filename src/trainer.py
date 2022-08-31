@@ -463,7 +463,7 @@ class ClassificationTrainer(Trainer):
                 with autocast():
                     z = self.net(X)
 
-                    loss = self._loss_func(z, y)
+                    loss = self._loss_func(z.log(), y)
 
                 scaler.scale(loss).backward()
 
@@ -489,19 +489,19 @@ class ClassificationTrainer(Trainer):
         self.net.eval()
         with torch.set_grad_enabled(False):
             for X, y in self._dataloader['val']:
-                y = self.prep_label(y)
+                p_target = self.prep_label(y)
                 X = X.to(self.device)
-                y = y.to(self.device)
+                p_target = p_target.to(self.device)
 
                 with autocast():
-                    y_hat = self.net(X)
+                    p_hat = self.net(X)
 
-                    loss_value = self._loss_func(y_hat, y).item()
+                    loss_value = self._loss_func(p_hat.log(), p_target).item()
 
-                val_loss += loss_value * len(y)  # scales to data size
+                val_loss += loss_value * len(p_target)  # scales to data size
 
-                y_hat = y_hat.cpu().detach().numpy() @ self.bincenters
-                y = y.cpu().detach().numpy() @ self.bincenters
+                y_hat = p_hat.cpu().detach().numpy() @ self.bincenters
+                y = y.cpu().detach().numpy()
                 
                 val_MAE += np.abs(y_hat - y).mean() * len(y)
                 per_subject_AE += np.abs(np.median(y_hat) - np.median(y))
