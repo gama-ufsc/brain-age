@@ -214,6 +214,9 @@ class Trainer():
         self._optim.load_state_dict(checkpoint['optimizer_state_dict'])
 
         return self
+    
+    def _make_loss_func(self):
+        self._loss_func = eval(f"nn.{self.loss_func}()")
 
     def setup_training(self):
         self.l.info('Setting up training')
@@ -228,7 +231,7 @@ class Trainer():
             Scheduler = eval(f"torch.optim.lr_scheduler.{self.lr_scheduler}")
             self._scheduler = Scheduler(self._optim, **self.lr_scheduler_params)
 
-        self._loss_func = eval(f"nn.{self.loss_func}()")
+        self._make_loss_func()
 
         self.l.info('Initializing wandb.')
         self.initialize_wandb()
@@ -265,7 +268,7 @@ class Trainer():
     def prepare_data(self):
         train_data = ADNIDatasetForBraTSModel(
             self.dataset_fpath,
-            dataset='train',
+            dataset='train+val',
             transform=self.transforms,
         )
         transforms_ = transforms.ToTensor() if 'slices' in self.dataset_fpath.name else torch.Tensor
@@ -426,7 +429,7 @@ class Trainer():
 
 class ClassificationTrainer(Trainer):
     def __init__(self, net: nn.Module, dataset_fpath: Path, epochs=5, lr= 0.01,
-                 optimizer: str = 'Adam', loss_func: str = 'KLDivLoss', h=lambda x: x,
+                 optimizer: str = 'Adam', loss_func: str = 'CrossEntropyLoss', h=lambda x: x,
                  lr_scheduler: str = None, lr_scheduler_params: dict = None,
                  batch_size=16, device=None, transforms=transforms.ToTensor(),
                  wandb_project="ADNI-brain-age", logger=None,
@@ -436,12 +439,26 @@ class ClassificationTrainer(Trainer):
                          transforms, wandb_project, logger, random_seed)
 
     def prep_label(self, y):
-        y = y.cpu().numpy()
-        y, self.bincenters = num2vect(y, (50,100), bin_step=1, sigma=1)
-        y = torch.Tensor(y)
-        
-        return y
-        
+        y = y.cpu()
+#         y, self.bincenters = num2vect(y, (49.5,99.5), bin_step=1, sigma=1)
+
+        class_range = (50, 100)
+        y_onehot = np.arange(class_range[1] - class_range[0]) + class_range[0]
+        y_onehot = np.tile(y_onehot, (y.shape[0],1))
+        y_onehot = torch.Tensor(y_onehot)
+        y_onehot = (y_onehot.T < y).T
+
+        return y_onehot.to(y)
+
+    def prep_y(self, y_hat):
+        y_hat_ = y_hat.roll(1, -1)
+        y_hat_[...,0] = 1.
+
+        p = y_hat_ - y_hat
+
+#         return p.argmax(-1) + 50
+        return p @ torch.arange(50,100).to(p)
+
     def train_pass(self, scaler):
         train_loss = 0
         self.net.train()
@@ -463,7 +480,7 @@ class ClassificationTrainer(Trainer):
                 with autocast():
                     z = self.net(X)
 
-                    loss = self._loss_func(z.log(), y)
+                    loss = self._loss_func(z, y.to(z))
 
                 scaler.scale(loss).backward()
 
@@ -485,7 +502,7 @@ class ClassificationTrainer(Trainer):
         val_MAE = 0
         per_subject_AE = 0
         n_subjects = 0
-        
+
         self.net.eval()
         with torch.set_grad_enabled(False):
             for X, y in self._dataloader['val']:
@@ -496,13 +513,15 @@ class ClassificationTrainer(Trainer):
                 with autocast():
                     p_hat = self.net(X)
 
-                    loss_value = self._loss_func(p_hat.log(), p_target).item()
+#                     loss_value = self._loss_func(p_hat.log(), p_target).item()
+                    loss_value = self._loss_func(p_hat, p_target.to(p_hat)).item()
 
                 val_loss += loss_value * len(p_target)  # scales to data size
 
-                y_hat = p_hat.cpu().detach().numpy() @ self.bincenters
+#                 y_hat = p_hat.cpu().detach().numpy() @ self.bincenters
+                y_hat = self.prep_y(p_hat).cpu().detach().numpy()
                 y = y.cpu().detach().numpy()
-                
+
                 val_MAE += np.abs(y_hat - y).mean() * len(y)
                 per_subject_AE += np.abs(np.median(y_hat) - np.median(y))
                 n_subjects += 1
@@ -514,3 +533,24 @@ class ClassificationTrainer(Trainer):
         val_ps_MAE = per_subject_AE / n_subjects
 
         return val_loss, val_MAE, val_ps_MAE
+
+    def _make_loss_func(self):
+        if self.loss_func == 'custom':
+            def get_distance_cross_entropy(age=lambda i: i, eps=1e-9):
+                def distance_cross_entropy(p, y):
+                    idx = torch.arange(y.shape[-1]).repeat(y.shape[0],1)
+                    w = (age(idx).T - age(y.argmax(-1))).abs().T
+
+                    y_ = 1 - y
+                    p_ = 1 - p
+                    l = y_ * torch.log(p_ + eps)
+                    l = l * w
+                    l = -l.sum(-1)
+
+                    return l.mean()  # aggregation
+
+                return distance_cross_entropy
+
+            self._loss_func = get_distance_cross_entropy(age=lambda i: i + 50)
+        else:
+            super()._make_loss_func(self)

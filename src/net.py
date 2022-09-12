@@ -39,7 +39,7 @@ class ClassifierBraTSnnUNet(nn.Module):
         self.pooling = nn.AvgPool2d(5)
 
         self.fc = nn.Linear(480,50)
-    
+
     def forward(self, x):
         x = self.pooling(x)
 

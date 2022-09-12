@@ -6,53 +6,95 @@ from torch import nn
 from src.trainer import Trainer, ClassificationTrainer
 from src.net import BraTSnnUNet, DecoderBraTSnnUNet, load_from_wandb, ClassifierBraTSnnUNet
 from torchvision import transforms, models
+from nnunet.training.model_restore import restore_model
 
 
 if __name__ == '__main__':
-    net = torch.load('/home/bruno-pacheco/brain-age/models/brats_model.pt')
+    net = torch.load('/home/jupyter/gama/bruno/models/brats_model.pt')
     net.pooling = nn.AvgPool2d(3)
-    Trainer(
+    net.fc = nn.Sequential(  # classifier output
+        nn.Linear(480,50),
+        nn.Softmax(dim=-1),
+    )
+    ClassificationTrainer(
         net,
-        # '/home/bruno-pacheco/brain-age/data/interim/ADNI_slices_fix.hdf5',
-        '/home/bruno-pacheco/brain-age/data/interim/ADNI_slices_fix_2mm_split.hdf5',
+    '/home/jupyter/data/ADNI/brats_2mm_preprocessed/ADNI_slices_fix_2mm_split.hdf5',
         epochs=30,
         lr=1e-3,
-        batch_size=2**6,
+        batch_size=64,
         lr_scheduler='MultiplicativeLR',
-        # lr_scheduler_params={'lr_lambda': lambda e: 1 -0.9*e/30},
+#         lr_scheduler_params={'lr_lambda': lambda e: 1 -0.9*e/50},
         lr_scheduler_params={'lr_lambda': lambda e: 1 - np.exp(5*(e/30 - 1))},
         transforms=transforms.Compose([
             transforms.ToTensor(),
         ])
     ).run()
 
-    net = models.resnet50(pretrained=True)
-    net.fc = nn.Sequential(nn.Linear(2048, 1024), nn.ReLU(), nn.Linear(1024, 1))
-    Trainer(
-        net,
-        '/home/bruno-pacheco/brain-age/data/interim/ADNI_slices_fix_2mm_split.hdf5',
-        epochs=30,
-        lr=1e-3,
-        batch_size=2**6,
-        lr_scheduler='MultiplicativeLR',
-        # lr_scheduler_params={'lr_lambda': lambda e: 1 -0.9*e/30},
-        lr_scheduler_params={'lr_lambda': lambda e: 1 - np.exp(5*(e/30 - 1))},
-        transforms=torch.Tensor,
-    ).run()
 
-    net = torch.load('/home/bruno-pacheco/brain-age/models/brainseg_model.pt')
-    net.pooling = nn.AvgPool2d(3)
-    Trainer(
-        net,
-        # '/home/bruno-pacheco/brain-age/data/interim/ADNI_slices_fix.hdf5',
-        '/home/bruno-pacheco/brain-age/data/interim/ADNI_slices_fix_2mm_split.hdf5',
-        epochs=30,
-        lr=1e-3,
-        batch_size=2**6,
-        lr_scheduler='MultiplicativeLR',
-        # lr_scheduler_params={'lr_lambda': lambda e: 1 -0.9*e/30},
-        lr_scheduler_params={'lr_lambda': lambda e: 1 - np.exp(5*(e/30 - 1))},
-        transforms=transforms.Compose([
-            transforms.ToTensor(),
-        ])
-    ).run()
+#     for lr in [1e-3, 1e-4, 1e-5]:
+#         for batch_size in [16, 32, 64]:
+#             net = torch.load('/home/jupyter/gama/bruno/models/brats_model.pt')
+#             net.pooling = nn.AvgPool2d(3)
+#             Trainer(
+#                 net,
+#             '/home/jupyter/data/ADNI/brats_2mm_preprocessed/ADNI_slices_fix_2mm_split.hdf5',
+#                 epochs=10,
+#                 lr=lr,
+#                 batch_size=batch_size,
+# #                 lr_scheduler='MultiplicativeLR',
+#                 # lr_scheduler_params={'lr_lambda': lambda e: 1 -0.9*e/30},
+# #                 lr_scheduler_params={'lr_lambda': lambda e: 1 - np.exp(5*(e/30 - 1))},
+#                 transforms=transforms.Compose([
+#                     transforms.ToTensor(),
+#                 ])
+#             ).run()
+
+
+#         nnunet_trainer = restore_model('/home/jupyter/gama/bruno/models/maper_checkpoint.model.pkl', checkpoint='/home/jupyter/gama/bruno/models/maper_checkpoint.model', train=False)
+#         net = BraTSnnUNet(nnunet_trainer.network)
+#         net.pooling = nn.AvgPool2d(3)
+#         Trainer(
+#             net,
+#             '/home/jupyter/data/ADNI/brats_2mm_preprocessed/ADNI_slices_fix_2mm_split.hdf5',
+#             epochs=30,
+#             lr=1e-3,
+#             batch_size=64,
+#             lr_scheduler='MultiplicativeLR',
+#             lr_scheduler_params={'lr_lambda': lambda e: 1 -0.9*e/30},
+# #                 lr_scheduler_params={'lr_lambda': lambda e: 1 - np.exp(5*(e/30 - 1))},
+#             transforms=transforms.Compose([
+#                 transforms.ToTensor(),
+#             ])
+#         ).run()
+
+
+#     net = models.resnet50(pretrained=True)
+#     net.fc = nn.Sequential(nn.Linear(2048, 1024), nn.ReLU(), nn.Linear(1024, 1))
+#     Trainer(
+#         net,
+#     '/home/jupyter/data/ADNI/brats_2mm_preprocessed/ADNI_slices_fix_2mm_split.hdf5',
+#         epochs=30,
+#         lr=1e-3,
+#         batch_size=2**6,
+#         lr_scheduler='MultiplicativeLR',
+#         # lr_scheduler_params={'lr_lambda': lambda e: 1 -0.9*e/30},
+#         lr_scheduler_params={'lr_lambda': lambda e: 1 - np.exp(5*(e/30 - 1))},
+#         transforms=torch.Tensor,
+#     ).run()
+
+
+#     net = torch.load('/home/jupyter/gama/bruno/models/brainseg_model.pt')
+#     net.pooling = nn.AvgPool2d(3)
+#     Trainer(
+#         net,
+#     '/home/jupyter/data/ADNI/brats_2mm_preprocessed/ADNI_slices_fix_2mm_split.hdf5',
+#         epochs=30,
+#         lr=1e-3,
+#         batch_size=2**6,
+#         lr_scheduler='MultiplicativeLR',
+#         lr_scheduler_params={'lr_lambda': lambda e: 1 -0.9*e/30},
+# #         lr_scheduler_params={'lr_lambda': lambda e: 1 - np.exp(5*(e/30 - 1))},
+#         transforms=transforms.Compose([
+#             transforms.ToTensor(),
+#         ])
+#     ).run()
