@@ -45,7 +45,7 @@ class ClassifierBraTSnnUNet(nn.Module):
 
         z = self.fc(x.squeeze()).squeeze()
 
-        return z
+        return torch.sigmoid(z)
 
 class BraTSnnUNet(nn.Module):
     def __init__(self, network, freeze=False):
