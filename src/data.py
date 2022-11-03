@@ -50,11 +50,38 @@ class ADNIDatasetForBraTSModel(Dataset):
             dataset = self.dataset
 
         with h5py.File(self._fpath, 'r') as h:
-            img = h[self.dataset]['X'][index_]
-            label = h[self.dataset]['y'][index_]
+            img = h[dataset]['X'][index_]
+            label = h[dataset]['y'][index_]
 
         # transform
         if self.transform is not None:
             img = self.transform(img)
 
         return img, label
+
+class ADNISemiSupervisedDataset(ADNIDatasetForBraTSModel):
+    def __getitem__(self, index: int):
+        if self.dataset == 'train+val':
+            with h5py.File(self._fpath, 'r') as h:
+                train_len = h['train']['y'].shape[0]
+            index_ = index - train_len
+
+            if index_ < 0:
+                dataset = 'train'
+            else:
+                dataset = 'val'
+        else:
+            index_ = index
+            dataset = self.dataset
+
+        with h5py.File(self._fpath, 'r') as h:
+            img = h[dataset]['X'][index_]
+            label = h[dataset]['y'][index_]
+        
+        i_slice = index_ % 40
+
+        # transform
+        if self.transform is not None:
+            img = self.transform(img)
+
+        return img, label, i_slice
