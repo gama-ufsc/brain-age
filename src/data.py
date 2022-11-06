@@ -27,14 +27,31 @@ class ADNIDatasetForBraTSModel(Dataset):
 
     def __len__(self):
         with h5py.File(self._fpath, 'r') as h:
-            l = h[self.dataset]['y'].shape[0]
+            if self.dataset == 'train+val':
+                l = h['train']['y'].shape[0]
+                l += h['val']['y'].shape[0]
+            else:
+                l = h[self.dataset]['y'].shape[0]
 
         return l
 
     def __getitem__(self, index: int):
+        if self.dataset == 'train+val':
+            with h5py.File(self._fpath, 'r') as h:
+                train_len = h['train']['y'].shape[0]
+            index_ = index - train_len
+
+            if index_ < 0:
+                dataset = 'train'
+            else:
+                dataset = 'val'
+        else:
+            index_ = index
+            dataset = self.dataset
+
         with h5py.File(self._fpath, 'r') as h:
-            img = h[self.dataset]['X'][index]
-            label = h[self.dataset]['y'][index]
+            img = h[dataset]['X'][index_]
+            label = h[dataset]['y'][index_]
 
         # transform
         if self.transform is not None:
