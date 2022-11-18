@@ -1,3 +1,7 @@
+import pickle
+import re
+import xml.etree.ElementTree as ET
+
 from os import remove
 from pathlib import Path
 from shutil import move
@@ -9,10 +13,10 @@ from tqdm import tqdm
 from brats.preprocessing.nipype_wrappers import ants_registration, ants_transformation
 
 
-INPUT_ADNI_DIR = Path('/data/slow/ADNI')
-OUTPUT_ADNI_DIR = Path('/data/slow/ADNI_prep')
+INPUT_ADNI_DIR = Path('/home/jupyter/gama/bruno/data/raw/ADNI1')
+OUTPUT_ADNI_DIR = Path('/home/jupyter/gama/bruno/data/raw/ADNI1_prep')
 
-TEMPLATE_FPATH = Path('/home/bruno-pacheco/brain-age/data/external/SRI24_T1.nii')
+TEMPLATE_FPATH = Path('/home/jupyter/gama/bruno/data/external/SRI24_T1.nii')
 
 tmpdir = Path('.tmpdir')
 
@@ -24,8 +28,7 @@ if __name__ == '__main__':
 
     tmpdir.mkdir(exist_ok=True)
 
-    metadata_fpath = next(INPUT_ADNI_DIR.glob('*.csv'))
-    df = pd.read_csv(metadata_fpath)
+    ages = dict()
 
     for img_fpath in tqdm(list(INPUT_ADNI_DIR.glob('**/*.nii'))):
         local_fpath = str(img_fpath).lstrip(str(INPUT_ADNI_DIR))
@@ -33,12 +36,12 @@ if __name__ == '__main__':
 
         image_id = img_fpath.name.split('_')[-1][:-4]
 
-        img_meta = df[(df['Subject'] == subject_id) & (df['Image Data ID'] == image_id)]
-        assert img_meta.shape[0] == 1, str(img_meta)
+        # get age from metadata
+        meta_fpath = INPUT_ADNI_DIR/re.sub(r"(?P<scaled>_Scaled)(?P<two>_2|)(?P<del>_Br_[0-9]*)(?P<end>_S)", '\g<scaled>\g<two>\g<end>', img_fpath.name).replace('.nii', '.xml').replace('_MR_MPR', '_MPR')
+        meta = ET.parse(meta_fpath)
+        ages[image_id] = float(meta.find('project').find('subject').find('study').find('subjectAge').text)
 
-        subject_age = img_meta.iloc[0]['Age']
-
-        output_fpath = OUTPUT_ADNI_DIR/f"{subject_id}__{image_id}__{subject_age}.nii"
+        output_fpath = OUTPUT_ADNI_DIR/f"{subject_id}__{image_id}.nii"
 
         if output_fpath.exists():
             continue
@@ -62,3 +65,6 @@ if __name__ == '__main__':
             remove(reg_transform)
         except FileNotFoundError:
             pass
+
+    with open(OUTPUT_ADNI_DIR/'ages.pkl', 'wb') as f:
+        pickle.dump(ages)
