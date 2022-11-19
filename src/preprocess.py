@@ -67,4 +67,4 @@ if __name__ == '__main__':
             pass
 
     with open(OUTPUT_ADNI_DIR/'ages.pkl', 'wb') as f:
-        pickle.dump(ages)
+        pickle.dump(ages, f)
