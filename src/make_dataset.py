@@ -6,10 +6,12 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pickle
 
 from batchgenerators.augmentations.utils import pad_nd_image
 from nnunet.preprocessing.preprocessing import PreprocessorFor2D
 from tqdm import tqdm
+from sklearn.model_selection import KFold
 
 from brats.preprocessing.hdbet_wrapper import hd_bet
 
@@ -17,10 +19,10 @@ import nibabel as nib
 from nibabel.processing import conform
 
 
-PREP_DATA_DIR = Path('/home/bruno-pacheco/brain-age/data/raw/ADNI_prep')
-DATASET_FPATH = Path('/home/bruno-pacheco/brain-age/data/interim/ADNI_slices_fix_2mm_split.hdf5')
+PREP_DATA_DIR = Path('/home/jupyter/gama/bruno/data/raw/ADNI1_prep')
+DATASET_FPATH = Path('/home/jupyter/gama/bruno/data/interim/ADNI1_slices_fix_2mm_5fold.hdf5')
 
-SPLIT_CSV_FPATH = Path('/home/bruno-pacheco/brain-age/notebooks/dataframe3D.csv')
+# SPLIT_CSV_FPATH = Path('/home/bruno-pacheco/brain-age/notebooks/dataframe3D.csv')
 
 DOWNSIZE = True
 
@@ -66,110 +68,98 @@ if __name__ == '__main__':
 
     tmpdir.mkdir(exist_ok=True)
 
-    assert SPLIT_CSV_FPATH.exists(), f"`{SPLIT_CSV_FPATH}` doesn't exist"
+#     assert SPLIT_CSV_FPATH.exists(), f"`{SPLIT_CSV_FPATH}` doesn't exist"
 
     target_shape = (80, 192, 160)
+
+    with open(PREP_DATA_DIR/'ages.pkl', 'rb') as f:
+        ages = pickle.load(f)
 
     if DOWNSIZE:
         target_shape = (40, 96, 96)
 
-    # split data
-    df = pd.read_csv(SPLIT_CSV_FPATH)
-    train_sids = df[df['split'] == 'train']['patient'].unique()
-    val_sids = df[df['split'] == 'val']['patient'].unique()
-    test_sids = df[df['split'] == 'test']['patient'].unique()
+#     # split data
+#     df = pd.read_csv(SPLIT_CSV_FPATH)
+#     train_sids = df[df['split'] == 'train']['patient'].unique()
+#     val_sids = df[df['split'] == 'val']['patient'].unique()
+#     test_sids = df[df['split'] == 'test']['patient'].unique()
 
-    train_fpaths_ = [list(PREP_DATA_DIR.glob(f"{sid[5:]}*.nii")) for sid in train_sids]
-    train_fpaths = list()
-    for fs in train_fpaths_:
-        train_fpaths += fs  # add all images from the subjects
-    train_fpaths = sorted(train_fpaths)
+#     train_fpaths_ = [list(PREP_DATA_DIR.glob(f"{sid[5:]}*.nii")) for sid in train_sids]
+#     train_fpaths = list()
+#     for fs in train_fpaths_:
+#         train_fpaths += fs  # add all images from the subjects
+#     train_fpaths = sorted(train_fpaths)
 
-    val_fpaths_ = [list(PREP_DATA_DIR.glob(f"{sid[5:]}*.nii")) for sid in val_sids]
-    val_fpaths = list()
-    for fs in val_fpaths_:
-        val_fpaths += fs  # add all images from the subjects
-    val_fpaths = sorted(val_fpaths)
+#     val_fpaths_ = [list(PREP_DATA_DIR.glob(f"{sid[5:]}*.nii")) for sid in val_sids]
+#     val_fpaths = list()
+#     for fs in val_fpaths_:
+#         val_fpaths += fs  # add all images from the subjects
+#     val_fpaths = sorted(val_fpaths)
 
-    test_fpaths_ = [list(PREP_DATA_DIR.glob(f"{sid[5:]}*.nii")) for sid in test_sids]
-    test_fpaths = list()
-    for fs in test_fpaths_:
-        test_fpaths += fs  # add all images from the subjects
-    test_fpaths = sorted(test_fpaths)
+#     test_fpaths_ = [list(PREP_DATA_DIR.glob(f"{sid[5:]}*.nii")) for sid in test_sids]
+#     test_fpaths = list()
+#     for fs in test_fpaths_:
+#         test_fpaths += fs  # add all images from the subjects
+#     test_fpaths = sorted(test_fpaths)
 
-    i_train = 0
-    i_test = 0
-    i_val = 0
+#     i_train = 0
+#     i_test = 0
+#     i_val = 0
+
+    all_fpaths = list(PREP_DATA_DIR.glob(f"*.nii"))
+
+    assert len(ages.keys()) == len(all_fpaths)
+
+    # make splits
+    splitter = KFold(5, shuffle=True, random_state=42)
+
+    sids = np.array(list({path.name.split('__')[0] for path in all_fpaths}))
+
+    folds_fpaths = list()
+    for _, fold_ix in splitter.split(sids):
+        fold_sids = sids[fold_ix]
+
+        fold_fpaths = np.array([path for path in all_fpaths if path.name.split('__')[0] in fold_sids])
+
+        folds_fpaths.append(fold_fpaths)
+
+    i_folds = [0,] * len(folds_fpaths)
 
     # create dataset
     if DATASET_FPATH.exists():
         # check if there's any progress already
-        with h5py.File(DATASET_FPATH, 'r') as h:
-            # overwrite the last image just to be sure
-            n_train = max((h['train']['y'].shape[0] // target_shape[0]) - 1,0)
-            n_test = max((h['test']['y'].shape[0] // target_shape[0]) -1,0)
-            n_val = max((h['val']['y'].shape[0] // target_shape[0]) -1,0)
+        for i, fold_fpaths in enumerate(folds_fpaths):
+            with h5py.File(DATASET_FPATH, 'r') as h:
+                # overwrite the last image just to be sure
+                n = max((h[str(i)]['y'].shape[0] // target_shape[0]) - 1,0)
 
-        train_fpaths = train_fpaths[n_train-1:]
-        test_fpaths = test_fpaths[n_test-1:]
-        val_fpaths = val_fpaths[n_val-1:]
+            fold_fpaths = fold_fpaths[n-1:]
 
-        i_train = n_train * target_shape[0]
-        i_test = n_test * target_shape[0]
-        i_val = n_val * target_shape[0]
+            folds_fpaths[i] = (train_fpaths, test_fpaths)
+            i_folds[i] = n * target_shape[0]
     else:
-        with h5py.File(DATASET_FPATH, 'w') as h:
-            train = h.create_group('train')
-            X_train = train.create_dataset(
-                'X',
-                (0,target_shape[1],target_shape[2]),
-                maxshape=(None,target_shape[1],target_shape[2]),
-                dtype='float32',
-                chunks=(1,target_shape[1],target_shape[2]),
-                compression='gzip',
-            )
-            y_train = train.create_dataset(
-                'y',
-                (0,),
-                maxshape=(None,),
-                dtype='uint8',
-            )
+        with h5py.File(DATASET_FPATH, 'w') as h:            
+            for i, _ in enumerate(folds_fpaths):
+                fold = h.create_group(str(i))
 
-            val = h.create_group('val')
-            X_val = val.create_dataset(
-                'X',
-                (0,target_shape[1],target_shape[2]),
-                maxshape=(None,target_shape[1],target_shape[2]),
-                dtype='float32',
-                chunks=(1,target_shape[1],target_shape[2]),
-                compression='gzip',
-            )
-            y_val = val.create_dataset(
-                'y',
-                (0,),
-                maxshape=(None,),
-                dtype='uint8',
-            )
-
-            test = h.create_group('test')
-            X_test = test.create_dataset(
-                'X',
-                (0,target_shape[1],target_shape[2]),
-                maxshape=(None,target_shape[1],target_shape[2]),
-                dtype='float32',
-                chunks=(1,target_shape[1],target_shape[2]),
-                compression='gzip',
-            )
-            y_test = test.create_dataset(
-                'y',
-                (0,),
-                maxshape=(None,),
-                dtype='uint8',
-            )
+                X = fold.create_dataset(
+                    'X',
+                    (0,target_shape[1],target_shape[2]),
+                    maxshape=(None,target_shape[1],target_shape[2]),
+                    dtype='float32',
+                    chunks=(1,target_shape[1],target_shape[2]),
+                    compression='gzip',
+                )
+                y = fold.create_dataset(
+                    'y',
+                    (0,),
+                    maxshape=(None,),
+                    dtype='float32',
+                )
 
     def update_dataset(imgs_fpaths, i, ds_name):
         for img_fpath in tqdm(imgs_fpaths):
-            age = int(img_fpath.name.split('.')[0].split('__')[-1])
+            age = ages[img_fpath.name.split('.')[0].split('__')[-1]]
 
             img = nib.load(img_fpath)
             dsz_img = conform(img, out_shape=tuple(np.array(img.shape) // 2), voxel_size=(2.,2.,2.))
@@ -197,11 +187,6 @@ if __name__ == '__main__':
             else:
                 img_fpath.unlink()
 
-    print('Working on train images')
-    # update_dataset(train_fpaths, i_train, 'train')
-
-    print('Working on test images')
-    # update_dataset(test_fpaths, i_test, 'test')
-
-    print('Working on val images')
-    # update_dataset(val_fpaths, i_val, 'val')
+    for i, fold_fpaths in enumerate(folds_fpaths):
+        print(f"Working on fold {i}")
+        update_dataset(fold_fpaths, i_folds[i], str(i))
