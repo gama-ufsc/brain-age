@@ -13,8 +13,8 @@ from tqdm import tqdm
 from brats.preprocessing.nipype_wrappers import ants_registration, ants_transformation
 
 
-INPUT_ADNI_DIR = Path('/home/jupyter/gama/bruno/data/raw/ADNI1')
-OUTPUT_ADNI_DIR = Path('/home/jupyter/gama/bruno/data/raw/ADNI1_prep')
+INPUT_ADNI_DIR = Path('/home/jupyter/gama/bruno/data/raw/ADNI23')
+OUTPUT_ADNI_DIR = Path('/home/jupyter/gama/bruno/data/raw/ADNI23_prep')
 
 TEMPLATE_FPATH = Path('/home/jupyter/gama/bruno/data/external/SRI24_T1.nii')
 
@@ -29,17 +29,20 @@ if __name__ == '__main__':
     tmpdir.mkdir(exist_ok=True)
 
     ages = dict()
+    groups = dict()
 
     for img_fpath in tqdm(list(INPUT_ADNI_DIR.glob('**/*.nii'))):
         local_fpath = str(img_fpath).lstrip(str(INPUT_ADNI_DIR))
         subject_id = local_fpath.split('/')[0]
 
-        image_id = img_fpath.name.split('_')[-1][:-4]
+        match = re.search(r"(?P<image_id>I[0-9]+)\.nii", img_fpath.name)
+        image_id = match['image_id']
 
         # get age from metadata
-        meta_fpath = INPUT_ADNI_DIR/re.sub(r"(?P<scaled>_Scaled)(?P<two>_2|)(?P<del>_Br_[0-9]*)(?P<end>_S)", '\g<scaled>\g<two>\g<end>', img_fpath.name).replace('.nii', '.xml').replace('_MR_MPR', '_MPR')
+        meta_fpath = next(Path(INPUT_ADNI_DIR).glob(f"*{image_id}.xml"))
         meta = ET.parse(meta_fpath)
         ages[image_id] = float(meta.find('project').find('subject').find('study').find('subjectAge').text)
+        groups[image_id] = meta.find('project').find('subject').find('researchGroup').text
 
         output_fpath = OUTPUT_ADNI_DIR/f"{subject_id}__{image_id}.nii"
 
@@ -65,6 +68,9 @@ if __name__ == '__main__':
             remove(reg_transform)
         except FileNotFoundError:
             pass
+
+    with open(OUTPUT_ADNI_DIR/'groups.pkl', 'wb') as f:
+        pickle.dump(groups, f)
 
     with open(OUTPUT_ADNI_DIR/'ages.pkl', 'wb') as f:
         pickle.dump(ages, f)
