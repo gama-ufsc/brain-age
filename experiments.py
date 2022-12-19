@@ -9,7 +9,12 @@ from torchvision import transforms, models
 from nnunet.training.model_restore import restore_model
 
 
+def weight_reset(m):
+    if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
+        m.reset_parameters()
+
 if __name__ == '__main__':
+    dataset_fpath = './data/interim/ADNI123_slices_fix_2mm_split.hdf5'
 #     for lr in [1e-2, 1e-4]:
 #     net = torch.load('/home/jupyter/gama/bruno/models/brats_model.pt')
 #     net.pooling = nn.AvgPool2d(3)
@@ -32,32 +37,13 @@ if __name__ == '__main__':
 #     ).run()
 
 
-    net = torch.load('/home/jupyter/gama/bruno/models/brats_model.pt')
-    net.pooling = nn.AvgPool2d(3)
-    net.fc = nn.Linear(480,2)
-    SemiSupervisedTrainer(
-        net,
-        '/home/jupyter/data/ADNI/brats_2mm_preprocessed/ADNI_slices_fix_2mm_split.hdf5',
-        epochs=100,
-        lr=1e-3,
-        batch_size=64,
-#         lr_scheduler='MultiplicativeLR',
-#         lr_scheduler_params={'lr_lambda': lambda e: 1 -0.9*e/30},
-#                 lr_scheduler_params={'lr_lambda': lambda e: 1 - np.exp(5*(e/30 - 1))},
-        transforms=transforms.Compose([
-            transforms.ToTensor(),
-        ])
-    ).run()
-
-
-#     for lr in [1e-3, 1e-4, 1e-5]:
-#         for batch_size in [16, 32, 64]:
 #     net = torch.load('/home/jupyter/gama/bruno/models/brats_model.pt')
 #     net.pooling = nn.AvgPool2d(3)
-#     Trainer(
+#     net.fc = nn.Linear(480,2)
+#     SemiSupervisedTrainer(
 #         net,
 #         '/home/jupyter/data/ADNI/brats_2mm_preprocessed/ADNI_slices_fix_2mm_split.hdf5',
-#         epochs=200,
+#         epochs=100,
 #         lr=1e-3,
 #         batch_size=64,
 # #         lr_scheduler='MultiplicativeLR',
@@ -68,6 +54,117 @@ if __name__ == '__main__':
 #         ])
 #     ).run()
 
+
+#     for lr in [1e-3, 1e-4, 1e-5]:
+#         for batch_size in [16, 32, 64]:
+    E = 30
+    s = 'train+val'
+
+    for _ in range(4):
+    #     net = torch.load('/home/jupyter/gama/bruno/models/brats_model.pt')
+        nnunet_trainer = restore_model('/home/jupyter/gama/bruno/models/maper_checkpoint.model.pkl', train=False)
+        nnunet_trainer.initialize(False)
+        net = BraTSnnUNet(nnunet_trainer.network)
+        net.pooling = nn.AvgPool2d(3)
+        net.apply(weight_reset)
+        Trainer(
+            net,
+            dataset_fpath,
+            epochs=E,
+            lr=1e-3,
+            batch_size=64,
+            lr_scheduler='MultiplicativeLR',
+            lr_scheduler_params={'lr_lambda': lambda e: 1 - np.exp(5*(e/E - 1))},
+            transforms=transforms.Compose([
+                transforms.ToTensor(),
+            ]),
+            split=s,
+            wandb_group='ADNI23_LR_UNet'
+        ).run()
+
+        net = torch.load('/home/jupyter/gama/bruno/models/brats_model.pt')
+        net.pooling = nn.AvgPool2d(3)
+        Trainer(
+            net,
+            dataset_fpath,
+            epochs=E,
+            lr=1e-3,
+            batch_size=64,
+            lr_scheduler='MultiplicativeLR',
+            lr_scheduler_params={'lr_lambda': lambda e: 1 - np.exp(5*(e/E - 1))},
+            transforms=transforms.Compose([
+                transforms.ToTensor(),
+            ]),
+            split=s,
+            wandb_group='ADNI23_LR_UNet+BraTS'
+        ).run()
+
+        nnunet_trainer = restore_model('/home/jupyter/gama/bruno/models/maper_checkpoint.model.pkl', checkpoint='/home/jupyter/gama/bruno/models/maper_checkpoint.model', train=False)
+        nnunet_trainer.initialize(False)
+        net = BraTSnnUNet(nnunet_trainer.network)
+        net.pooling = nn.AvgPool2d(3)
+        Trainer(
+            net,
+            dataset_fpath,
+            epochs=E,
+            lr=1e-3,
+            batch_size=64,
+            lr_scheduler='MultiplicativeLR',
+            lr_scheduler_params={'lr_lambda': lambda e: 1 - np.exp(5*(e/E - 1))},
+            transforms=transforms.Compose([
+                transforms.ToTensor(),
+            ]),
+            split=s,
+            wandb_group='ADNI23_LR_UNet+old_MAPER'
+        ).run()
+
+    #     net = torch.load('/home/jupyter/gama/bruno/models/brats_model.pt')
+        net = torch.load('/home/jupyter/gama/bruno/models/brainseg_model.pt')
+        net.pooling = nn.AvgPool2d(3)
+        Trainer(
+            net,
+            dataset_fpath,
+            epochs=E,
+            lr=1e-3,
+            batch_size=64,
+            lr_scheduler='MultiplicativeLR',
+            lr_scheduler_params={'lr_lambda': lambda e: 1 - np.exp(5*(e/E - 1))},
+            transforms=transforms.Compose([
+                transforms.ToTensor(),
+            ]),
+            split=s,
+            wandb_group='ADNI23_LR_UNet+old_FSL_BrainSeg'
+        ).run()
+
+        net = models.resnet50(pretrained=False)
+        net.fc = nn.Sequential(nn.Linear(2048, 1024), nn.ReLU(), nn.Linear(1024, 1))
+        Trainer(
+            net,
+            dataset_fpath,
+            epochs=E,
+            lr=1e-3,
+            batch_size=64,
+            lr_scheduler='MultiplicativeLR',
+            lr_scheduler_params={'lr_lambda': lambda e: 1 - np.exp(5*(e/E - 1))},
+            transforms=torch.Tensor,
+            split=s,
+            wandb_group='ADNI23_LR_ResNet50'
+        ).run()
+
+        net = models.resnet50(pretrained=True)
+        net.fc = nn.Sequential(nn.Linear(2048, 1024), nn.ReLU(), nn.Linear(1024, 1))
+        Trainer(
+            net,
+            dataset_fpath,
+            epochs=E,
+            lr=1e-3,
+            batch_size=64,
+            lr_scheduler='MultiplicativeLR',
+            lr_scheduler_params={'lr_lambda': lambda e: 1 - np.exp(5*(e/E - 1))},
+            transforms=torch.Tensor,
+            split=s,
+            wandb_group='ADNI23_LR_ResNet50+ImageNet'
+        ).run()
 
 #         nnunet_trainer = restore_model('/home/jupyter/gama/bruno/models/maper_checkpoint.model.pkl', checkpoint='/home/jupyter/gama/bruno/models/maper_checkpoint.model', train=False)
 #         nnunet_trainer = restore_model('/home/jupyter/gama/bruno/models/maper_checkpoint.model.pkl', train=False)

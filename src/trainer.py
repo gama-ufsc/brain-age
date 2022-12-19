@@ -19,7 +19,7 @@ from torch.utils.data import DataLoader, Dataset
 import wandb
 from dotenv import load_dotenv, find_dotenv
 
-from src.data import ADNIDatasetForBraTSModel, ADNISemiSupervisedDataset
+from src.data import ADNIDataset, ADNISemiSupervisedDataset
 from src.net import BraTSnnUNet
 
 
@@ -103,11 +103,11 @@ class Trainer():
         NumPy as PyTorch (makes trainig reproducible).
     """
     def __init__(self, net: nn.Module, dataset_fpath: Path, epochs=5, lr= 0.01,
-                 optimizer: str = 'Adam', loss_func: str = 'MSELoss', h=lambda x: x,
+                 optimizer: str = 'Adam', loss_func: str = 'MSELoss', h=lambda x: x*25+75,
                  lr_scheduler: str = None, lr_scheduler_params: dict = None,
                  batch_size=16, device=None, transforms=transforms.ToTensor(),
-                 wandb_project="ADNI-brain-age", logger=None,
-                 random_seed=42) -> None:
+                 wandb_project="ADNI-brain-age", logger=None, split=0,
+                 random_seed=42, wandb_group=None) -> None:
         self._is_initalized = False
 
         self._e = 0  # inital epoch
@@ -133,6 +133,8 @@ class Trainer():
         self.loss_func = loss_func
         self.lr_scheduler = lr_scheduler
         self.lr_scheduler_params = lr_scheduler_params
+        
+        self.split = split
 
         if logger is None:
             logging.basicConfig(level=logging.INFO)
@@ -149,6 +151,7 @@ class Trainer():
         self.best_val = float('inf')
 
         self.wandb_project = wandb_project
+        self.wandb_group = wandb_group
 
     @classmethod
     def load_trainer(cls, run_id: str, wandb_project="part-counting-regressor",
@@ -197,6 +200,7 @@ class Trainer():
             logger=logger,
             wandb_project=wandb_project,
             random_seed=wandb.config['random_seed'],
+            split=wandb.config['split'],
         )
 
         if 'best_val' in checkpoint.keys():
@@ -246,6 +250,7 @@ class Trainer():
         wandb.init(
             project=self.wandb_project,
             entity=os.environ['wandb_entity'],
+            group=self.wandb_group,
             config={
                 "learning_rate": self.lr,
                 "epochs": self.epochs,
@@ -257,6 +262,7 @@ class Trainer():
                 "loss_func": self.loss_func,
                 "random_seed": self.random_seed,
                 "device": self.device,
+                "split": self.split,
             },
         )
 
@@ -267,13 +273,30 @@ class Trainer():
         self.l.info(f"Wandb set up. Run ID: {self._id}")
 
     def prepare_data(self):
-        train_data = ADNIDatasetForBraTSModel(
-            self.dataset_fpath,
-            dataset='train',
-            transform=self.transforms,
-        )
+        if self.split == 'train':
+            train_data = ADNIDataset(
+                self.dataset_fpath,
+                dataset='train',
+                transform=self.transforms,
+            )
+            val_data = ADNIDataset(
+                self.dataset_fpath,
+                dataset='val',
+                transform=self.transforms,
+            )
+        elif self.split == 'train+val':
+            train_data = ADNIDataset(
+                self.dataset_fpath,
+                dataset='train+val',
+                transform=self.transforms,
+            )
+            val_data = ADNIDataset(
+                self.dataset_fpath,
+                dataset='test',
+                transform=self.transforms,
+            )
+
         transforms_ = transforms.ToTensor() if 'slices' in self.dataset_fpath.name else torch.Tensor
-        val_data = ADNIDatasetForBraTSModel(self.dataset_fpath, dataset='val', transform=self.transforms)
 
         # instantiate DataLoaders
         self._dataloader = {
