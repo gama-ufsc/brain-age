@@ -21,7 +21,9 @@ from nibabel.processing import conform
 
 ADNI1_DATA_DIR = Path('/home/jupyter/gama/bruno/data/raw/ADNI1_prep')
 ADNI23_DATA_DIR = Path('/home/jupyter/gama/bruno/data/raw/ADNI23_prep')
-DATASET_FPATH = Path('/home/jupyter/gama/bruno/data/interim/ADNI123_slices_fix_2mm_split.hdf5')
+DATASET_FPATH = Path('/home/jupyter/gama/bruno/data/interim/ADNI123_slices_fix_2mm_split_class.hdf5')
+
+labels_order = np.array(['CN', 'EMCI', 'LMCI', 'MCI', 'AD', 'SMC'])
 
 DOWNSIZE = True
 
@@ -65,7 +67,7 @@ if __name__ == '__main__':
     assert ADNI1_DATA_DIR.exists(), f"`{ADNI1_DATA_DIR}` doesn't exist"
     assert ADNI23_DATA_DIR.exists(), f"`{ADNI23_DATA_DIR}` doesn't exist"
     assert DATASET_FPATH.parent.exists(), f"`{DATASET_FPATH.parent}` doesn't exist"
-    
+
     tmpdir.mkdir(exist_ok=True)
 
 #     assert SPLIT_CSV_FPATH.exists(), f"`{SPLIT_CSV_FPATH}` doesn't exist"
@@ -78,18 +80,14 @@ if __name__ == '__main__':
     with open(ADNI1_DATA_DIR/'ages.pkl', 'rb') as f:
         adni1_ages = pickle.load(f)
 
-    
     with open(ADNI23_DATA_DIR/'groups.pkl', 'rb') as f:
         adni23_groups = pickle.load(f)
 
     with open(ADNI23_DATA_DIR/'ages.pkl', 'rb') as f:
         adni23_ages = pickle.load(f)
 
-    ages = dict()
-    for k,v in adni1_ages.items():
-        ages[k] = v
-    for k,v in adni23_ages.items():
-        ages[k] = v
+    groups = dict(adni23_groups, **adni1_groups)
+    ages = dict(adni23_ages, **adni1_ages)
 
     if DOWNSIZE:
         target_shape = (40, 96, 96)
@@ -100,9 +98,9 @@ if __name__ == '__main__':
     assert len(adni1_ages.keys()) == len(adni1_fpaths)
     assert len(adni23_ages.keys()) == len(adni23_fpaths)
 
-    # pick only CN
-    adni1_fpaths = [fp for fp in adni1_fpaths if adni1_groups[fp.name.split('__')[1].rstrip('.nii')] == 'CN']
-    adni23_fpaths = [fp for fp in adni23_fpaths if adni23_groups[fp.name.split('__')[1].rstrip('.nii')] == 'CN']
+    # drop weird groups (only 5 subjects)
+    adni1_fpaths = [fp for fp in adni1_fpaths if groups[fp.name.split('__')[1].rstrip('.nii')] != 'Patient']
+    adni23_fpaths = [fp for fp in adni23_fpaths if groups[fp.name.split('__')[1].rstrip('.nii')] != 'Patient']
 
     # split data
     df_cv = pd.read_csv('/home/jupyter/gama/bruno/data/external/CROSSVAL.csv')
@@ -164,7 +162,7 @@ if __name__ == '__main__':
                 'y',
                 (0,),
                 maxshape=(None,),
-                dtype='float32',
+                dtype='uint8',
             )
 
             val = h.create_group('val')
@@ -180,7 +178,7 @@ if __name__ == '__main__':
                 'y',
                 (0,),
                 maxshape=(None,),
-                dtype='float32',
+                dtype='uint8',
             )
 
             test = h.create_group('test')
@@ -196,12 +194,12 @@ if __name__ == '__main__':
                 'y',
                 (0,),
                 maxshape=(None,),
-                dtype='float32',
+                dtype='uint8',
             )
 
     def update_dataset(imgs_fpaths, i, ds_name):
         for img_fpath in tqdm(imgs_fpaths):
-            age = ages[img_fpath.name.split('.')[0].split('__')[-1]]
+            group = groups[img_fpath.name.split('__')[1].rstrip('.nii')]
 
             img = nib.load(img_fpath)
             dsz_img = conform(img, out_shape=tuple(np.array(img.shape) // 2), voxel_size=(2.,2.,2.))
@@ -224,7 +222,7 @@ if __name__ == '__main__':
                     y.resize(i + target_shape[0], axis=0)
 
                     X[i:i+target_shape[0]] = brain[0]
-                    y[i:i+target_shape[0]] = age
+                    y[i:i+target_shape[0]] = np.where(labels_order == group)[0][0]
                 i += target_shape[0]
             else:
                 img_fpath.unlink()
