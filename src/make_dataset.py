@@ -158,6 +158,12 @@ if __name__ == '__main__':
                 chunks=(1,target_shape[1],target_shape[2]),
                 compression='gzip',
             )
+            a = train.create_dataset(
+                'a',
+                (0,),
+                maxshape=(None,),
+                dtype='float32',
+            )
             y = train.create_dataset(
                 'y',
                 (0,),
@@ -173,6 +179,12 @@ if __name__ == '__main__':
                 dtype='float32',
                 chunks=(1,target_shape[1],target_shape[2]),
                 compression='gzip',
+            )
+            a = val.create_dataset(
+                'a',
+                (0,),
+                maxshape=(None,),
+                dtype='float32',
             )
             y = val.create_dataset(
                 'y',
@@ -190,6 +202,12 @@ if __name__ == '__main__':
                 chunks=(1,target_shape[1],target_shape[2]),
                 compression='gzip',
             )
+            a = test.create_dataset(
+                'a',
+                (0,),
+                maxshape=(None,),
+                dtype='float32',
+            )
             y = test.create_dataset(
                 'y',
                 (0,),
@@ -200,6 +218,7 @@ if __name__ == '__main__':
     def update_dataset(imgs_fpaths, i, ds_name):
         for img_fpath in tqdm(imgs_fpaths):
             group = groups[img_fpath.name.split('__')[1].rstrip('.nii')]
+            age = ages[img_fpath.name.split('__')[1].rstrip('.nii')]
 
             img = nib.load(img_fpath)
             dsz_img = conform(img, out_shape=tuple(np.array(img.shape) // 2), voxel_size=(2.,2.,2.))
@@ -216,12 +235,15 @@ if __name__ == '__main__':
             if brain[0].shape == target_shape:
                 with h5py.File(DATASET_FPATH, 'r+') as h:
                     X = h[ds_name]['X']
+                    a = h[ds_name]['a']
                     y = h[ds_name]['y']
 
                     X.resize(i + target_shape[0], axis=0)
+                    a.resize(i + target_shape[0], axis=0)
                     y.resize(i + target_shape[0], axis=0)
 
                     X[i:i+target_shape[0]] = brain[0]
+                    a[i:i+target_shape[0]] = age
                     y[i:i+target_shape[0]] = np.where(labels_order == group)[0][0]
                 i += target_shape[0]
             else:
