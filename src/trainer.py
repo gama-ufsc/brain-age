@@ -19,7 +19,7 @@ from torch.utils.data import DataLoader, Dataset
 import wandb
 from dotenv import load_dotenv, find_dotenv
 
-from src.data import ADNIDataset, ADNISemiSupervisedDataset
+from src.data import ADNIDataset, ADNIDatasetClassification
 from src.net import BraTSnnUNet
 
 
@@ -152,6 +152,8 @@ class Trainer():
 
         self.wandb_project = wandb_project
         self.wandb_group = wandb_group
+        
+        self._Dataset = ADNIDataset
 
     @classmethod
     def load_trainer(cls, run_id: str, wandb_project="part-counting-regressor",
@@ -274,23 +276,23 @@ class Trainer():
 
     def prepare_data(self):
         if self.split == 'train':
-            train_data = ADNIDataset(
+            train_data = self._Dataset(
                 self.dataset_fpath,
                 dataset='train',
                 transform=self.transforms,
             )
-            val_data = ADNIDataset(
+            val_data = self._Dataset(
                 self.dataset_fpath,
                 dataset='val',
                 transform=self.transforms,
             )
         elif self.split == 'train+val':
-            train_data = ADNIDataset(
+            train_data = self._Dataset(
                 self.dataset_fpath,
                 dataset='train+val',
                 transform=self.transforms,
             )
-            val_data = ADNIDataset(
+            val_data = self._Dataset(
                 self.dataset_fpath,
                 dataset='test',
                 transform=self.transforms,
@@ -321,27 +323,19 @@ class Trainer():
             self.l.info(f"Training loss = {train_loss}")
 
             # validation
-            val_time, (val_loss, val_MAE, val_ps_MAE) = timeit(self.validation_pass)()
-
+            val_time, val_scores = timeit(self.validation_pass)()
             self.l.info(f"Validation pass took {val_time:.3f} seconds")
-            self.l.info(f"Validation loss = {val_loss}")
-            self.l.info(f"Validation MAE = {val_MAE}")
 
-            wandb.log({
-                "train_loss": train_loss,
-                "val_loss": val_loss,
-                "val_MAE": val_MAE,
-                "val_ps_MAE": val_ps_MAE,
-            }, step=self._e, commit=True)
+            self.log_val_scores(train_loss, val_scores)
 
             self.l.info(f"Saving checkpoint")
             self.save_checkpoint()
 
-            if val_ps_MAE < self.best_val:
+            if val_scores[-1] < self.best_val:
                 self.l.info(f"Saving best model")
                 self.save_model(name='model_best')
 
-                self.best_val = val_ps_MAE
+                self.best_val = val_scores[-1]
 
             epoch_end_time = time()
             self.l.info(
@@ -356,6 +350,19 @@ class Trainer():
 
         wandb.finish()
         self.l.info('Training finished!')
+
+    def log_val_scores(self, train_loss, val_scores):
+        val_loss, val_MAE, val_ps_MAE = val_scores
+        
+        self.l.info(f"Validation {self.loss_func} = {val_loss}")
+        self.l.info(f"Validation MAE = {val_MAE}")
+
+        wandb.log({
+            "train_loss": train_loss,
+            "val_loss": val_loss,
+            "val_MAE": val_MAE,
+            "val_ps_MAE": val_ps_MAE,
+        }, step=self._e, commit=True)
 
     def train_pass(self, scaler):
         train_loss = 0
@@ -451,167 +458,26 @@ class Trainer():
 
         return fpath
 
-class SemiSupervisedTrainer(Trainer):
-    def __init__(self, net: nn.Module, dataset_fpath: Path, epochs=5, lr= 0.01,
-                 optimizer: str = 'Adam', loss_func: str = 'MSELoss', h=lambda x: x,
-                 lr_scheduler: str = None, lr_scheduler_params: dict = None,
-                 batch_size=16, device=None, transforms=transforms.ToTensor(),
-                 wandb_project="ADNI-brain-age", logger=None,
-                 random_seed=42) -> None:
-        super().__init__(net, dataset_fpath, epochs, lr, optimizer, loss_func, h,
-                         lr_scheduler, lr_scheduler_params, batch_size, device,
-                         transforms, wandb_project, logger, random_seed)
-
-    def prepare_data(self):
-        train_data = ADNISemiSupervisedDataset(
-            self.dataset_fpath,
-            dataset='train',
-            transform=self.transforms,
-        )
-        transforms_ = transforms.ToTensor() if 'slices' in self.dataset_fpath.name else torch.Tensor
-        val_data = ADNISemiSupervisedDataset(self.dataset_fpath, dataset='val', transform=self.transforms)
-
-        # instantiate DataLoaders
-        self._dataloader = {
-            'train': DataLoader(train_data, batch_size=self.batch_size,
-                                shuffle=True),
-            'val': DataLoader(val_data, batch_size=40, shuffle=False),
-        }
-
-    def train_pass(self, scaler):
-        train_loss = 0
-        self.net.train()
-        with torch.set_grad_enabled(True):
-            for X, y, slice_true in tqdm(self._dataloader['train']):
-                X = X.to(self.device)
-                y = y.to(self.device)
-                slice_true = slice_true.to(self.device)
-
-                try:
-                    n = self.net.conv1.in_channels
-                    X = X.unsqueeze(1).repeat((1,n,1,1))  # fix input channels
-                except:
-                    pass
-
-                self._optim.zero_grad()
-
-                with autocast():
-                    net_output = self.h(self.net(X))
-                    y_hat, slice_hat = net_output[...,:1], net_output[...,1:]
-                    loss_y = self._loss_func(
-                        y_hat.view_as(y),
-                        y.float()
-                    )
-                    loss_slice = self._loss_func(
-                        slice_hat.view_as(slice_true),
-                        slice_true.float()
-                    )
-                    loss = (loss_y + .2*loss_slice) / 1.2
-
-                scaler.scale(loss).backward()
-
-                train_loss += loss.item() * len(y)
-
-                scaler.step(self._optim)
-                scaler.update()
-
-            if self.lr_scheduler is not None:
-                self._scheduler.step()
-
-        # scale to data size
-        train_loss = train_loss / len(self._dataloader['train'].dataset)
-
-        return train_loss
-
-    def validation_pass(self):
-        val_loss = 0
-        val_MAE = 0
-        per_subject_AE = 0
-        n_subjects = 0
-
-        self.net.eval()
-        with torch.set_grad_enabled(False):
-            for X, y, slice_true in self._dataloader['val']:
-                X = X.to(self.device)
-                y = y.to(self.device)
-                slice_true = slice_true.to(self.device)
-
-                try:
-                    n = self.net.conv1.in_channels
-                    X = X.unsqueeze(1).repeat((1,n,1,1))  # fix input channels
-                except:
-                    pass
-
-                with autocast():
-                    net_output = self.h(self.net(X))
-                    y_hat, slice_hat = net_output[...,:1], net_output[...,1:]
-                    loss_y = self._loss_func(
-                        y_hat.view_as(y),
-                        y.float()
-                    )
-                    loss_slice = self._loss_func(
-                        slice_hat.view_as(slice_true),
-                        slice_true.float()
-                    )
-                    loss_value = (loss_y + .2*loss_slice) / 1.2
-
-                val_loss += loss_value * len(y)  # scales to data size
-
-                val_MAE += (y_hat - y).abs().mean().item() * len(y)
-                per_subject_AE += (y_hat.median() - y.median()).abs().item()
-                n_subjects += 1
-
-        # scale to data size
-        len_data = len(self._dataloader['val'].dataset)
-        val_loss = val_loss / len_data
-        val_MAE = val_MAE / len_data
-        val_ps_MAE = per_subject_AE / n_subjects
-
-        return val_loss, val_MAE, val_ps_MAE
-
 class ClassificationTrainer(Trainer):
-    def __init__(self, net: nn.Module, dataset_fpath: Path, epochs=5, lr= 0.01,
+    def __init__(self, net: nn.Module, dataset_fpath: Path, epochs=5, lr=0.01,
                  optimizer: str = 'Adam', loss_func: str = 'CrossEntropyLoss', h=lambda x: x,
                  lr_scheduler: str = None, lr_scheduler_params: dict = None,
                  batch_size=16, device=None, transforms=transforms.ToTensor(),
-                 wandb_project="ADNI-brain-age", logger=None,
-                 random_seed=42) -> None:
+                 wandb_project="ADNI-AD-CN", logger=None, split=0,
+                 random_seed=42, wandb_group=None) -> None:
         super().__init__(net, dataset_fpath, epochs, lr, optimizer, loss_func, h,
                          lr_scheduler, lr_scheduler_params, batch_size, device,
-                         transforms, wandb_project, logger, random_seed)
-
-    def prep_label(self, y):
-        y = y.cpu()
-#         y, self.bincenters = num2vect(y, (49.5,99.5), bin_step=1, sigma=1)
-
-#         class_range = (50, 100)
-#         y_onehot = np.arange(class_range[1] - class_range[0]) + class_range[0]
-#         y_onehot = np.tile(y_onehot, (y.shape[0],1))
-#         y_onehot = torch.Tensor(y_onehot)
-#         y_onehot = (y_onehot.T < y).T
-        
-        y_onehot = F.one_hot((y-50).to(int), 50)
-
-        return y_onehot.to(y)
-
-    def prep_y(self, y_hat):
-#         y_hat_ = y_hat.roll(1, -1)
-#         y_hat_[...,0] = 1.
-
-#         p = y_hat_ - y_hat
-
-#         return p.argmax(-1) + 50
-        return y_hat @ torch.arange(50,100).to(y_hat)
+                         transforms, wandb_project, logger, split, random_seed, wandb_group)
+    
+        self._Dataset = ADNIDatasetClassification
 
     def train_pass(self, scaler):
         train_loss = 0
         self.net.train()
         with torch.set_grad_enabled(True):
             for X, y in tqdm(self._dataloader['train']):
-                y = self.prep_label(y)
-
                 X = X.to(self.device)
-                y = y.to(self.device)
+                y = y.to(self.device).squeeze(-1)
 
                 try:
                     n = self.net.conv1.in_channels
@@ -622,9 +488,9 @@ class ClassificationTrainer(Trainer):
                 self._optim.zero_grad()
 
                 with autocast():
-                    p = self.net(X)
+                    p_hat = self.net(X)  # output in probability mass (logits)
 
-                    loss = self._loss_func(p, y.to(p))
+                    loss = self._loss_func(p_hat, y)
 
                 scaler.scale(loss).backward()
 
@@ -643,40 +509,55 @@ class ClassificationTrainer(Trainer):
 
     def validation_pass(self):
         val_loss = 0
-        val_MAE = 0
-        per_subject_AE = 0
+        val_acc = 0
+        per_subject_acc = 0
         n_subjects = 0
 
         self.net.eval()
         with torch.set_grad_enabled(False):
             for X, y in self._dataloader['val']:
-                p_target = self.prep_label(y)
                 X = X.to(self.device)
-                p_target = p_target.to(self.device)
+                y = y.to(self.device).squeeze(-1)
 
                 with autocast():
                     p_hat = self.net(X)
 
-#                     loss_value = self._loss_func(p_hat.log(), p_target).item()
-                    loss_value = self._loss_func(p_hat, p_target.to(p_hat)).item()
+                    loss_value = self._loss_func(p_hat, y).item()
 
-                val_loss += loss_value * len(p_target)  # scales to data size
+                val_loss += loss_value * len(p_hat)  # scales to data size
 
-#                 y_hat = p_hat.cpu().detach().numpy() @ self.bincenters
-                y_hat = self.prep_y(p_hat).cpu().detach().numpy()
+                y_hat = p_hat.cpu().detach().numpy()
+                y_hat = np.argmax(y_hat, axis=-1)
+                subject_y_hat = np.argmax(np.bincount(y_hat))
+
                 y = y.cpu().detach().numpy()
+                subject_y = np.median(y)
 
-                val_MAE += np.abs(y_hat - y).mean() * len(y)
-                per_subject_AE += np.abs(np.median(y_hat) - np.median(y))
+                val_acc += (y_hat == y).sum()
+                per_subject_acc += int(subject_y_hat == subject_y)
                 n_subjects += 1
 
         # scale to data size
         len_data = len(self._dataloader['val'].dataset)
         val_loss = val_loss / len_data
-        val_MAE = val_MAE / len_data
-        val_ps_MAE = per_subject_AE / n_subjects
+        val_acc = val_acc / len_data
+        val_ps_acc = per_subject_acc / n_subjects
 
-        return val_loss, val_MAE, val_ps_MAE
+        return val_loss, val_acc, val_ps_acc
+
+    def log_val_scores(self, train_loss, val_scores):
+        val_loss, val_acc, val_ps_acc = val_scores
+
+        self.l.info(f"Validation {self.loss_func} = {val_loss}")
+        self.l.info(f"Validation Accuracy = {100*val_acc:.2f}%")
+        self.l.info(f"Validation Accuracy per subject = {100*val_ps_acc:.2f}%")
+
+        wandb.log({
+            "train_loss": train_loss,
+            "val_loss": val_loss,
+            "val_acc": val_acc,
+            "val_ps_acc": val_ps_acc,
+        }, step=self._e, commit=True)
 
     def _make_loss_func(self):
         if self.loss_func == 'custom':
