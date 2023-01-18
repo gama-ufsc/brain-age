@@ -2,6 +2,7 @@ import h5py
 
 from pathlib import Path
 
+import numpy as np
 import torch
 
 from torch.utils.data import Dataset
@@ -58,6 +59,61 @@ class ADNIDataset(Dataset):
             img = self.transform(img)
 
         return img, label
+
+class ADNIDatasetClassification(ADNIDataset):
+    def __init__(
+        self,
+        hdf5_fpath,
+        transform=torch.Tensor,
+        dataset='train',
+        labels=['CN','AD'],
+    ) -> None:
+        super().__init__(
+            hdf5_fpath=hdf5_fpath,
+            transform=transform,
+            dataset=dataset,
+        )
+
+        self._labels_order = np.array(['CN', 'EMCI', 'LMCI', 'MCI', 'AD', 'SMC'])
+        self.labels = labels
+        self._labels_i_order = np.where(np.isin(self._labels_order, self.labels))[0]
+
+        self._update_idx()
+
+    def _update_idx(self):
+        with h5py.File(self._fpath, 'r') as h:
+            # get true length
+            if self.dataset == 'train+val':
+                l = h['train']['y'].shape[0]
+                l += h['val']['y'].shape[0]
+            else:
+                l = h[self.dataset]['y'].shape[0]
+
+            y_is_labels = np.full((l,), False)
+            for label in self.labels:
+                label_i = np.where(self._labels_order == label)[0]
+
+                if self.dataset == 'train+val':
+                    y_is_label_train = h['train']['y'][:] == label_i
+                    y_is_label_val = h['val']['y'][:] == label_i
+                    y_is_label = np.concatenate([y_is_label_train, y_is_label_val])
+                else:
+                    y_is_label = h[self.dataset]['y'][:] == label_i
+
+                y_is_labels |= y_is_label
+
+        self._idx = np.where(y_is_labels)[0]
+
+    def __len__(self):
+        # Uncomment the line below if the dataset changes along the usage
+#         self._update_idx()
+
+        return len(self._idx)
+
+    def __getitem__(self, index: int):
+        img, label = super().__getitem__(self._idx[index])
+
+        return img, np.where(self._labels_i_order == label)[0]
 
 class ADNIDatasetKFold(Dataset):
     def __init__(
@@ -122,17 +178,3 @@ class ADNIDatasetKFold(Dataset):
             img = self.transform(img)
 
         return img, label
-    
-class ADNISemiSupervisedDataset(ADNIDataset):
-    def __getitem__(self, index: int):
-        with h5py.File(self._fpath, 'r') as h:
-            img = h[str(self.split)]['X'][index]
-            label = h[str(self.split)]['y'][index]
-
-        i_slice = index % 40
-
-        # transform
-        if self.transform is not None:
-            img = self.transform(img)
-
-        return img, label, i_slice
