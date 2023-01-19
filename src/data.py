@@ -50,6 +50,9 @@ class ADNIDataset(Dataset):
             index_ = index
             dataset = self.dataset
 
+        return self._get_item(dataset, index_)
+
+    def _get_item(self, dataset, index_):
         with h5py.File(self._fpath, 'r') as h:
             img = h[dataset]['X'][index_]
             label = h[dataset]['y'][index_]
@@ -66,6 +69,7 @@ class ADNIDatasetClassification(ADNIDataset):
         hdf5_fpath,
         transform=torch.Tensor,
         dataset='train',
+        get_age=False,
         labels=['CN','AD'],
     ) -> None:
         super().__init__(
@@ -77,6 +81,8 @@ class ADNIDatasetClassification(ADNIDataset):
         self._labels_order = np.array(['CN', 'EMCI', 'LMCI', 'MCI', 'AD', 'SMC'])
         self.labels = labels
         self._labels_i_order = np.where(np.isin(self._labels_order, self.labels))[0]
+
+        self.get_age = get_age
 
         self._update_idx()
 
@@ -110,10 +116,40 @@ class ADNIDatasetClassification(ADNIDataset):
 
         return len(self._idx)
 
-    def __getitem__(self, index: int):
-        img, label = super().__getitem__(self._idx[index])
+    def fix_label(self, label):
+        try:
+            labels_i_orders = np.stack([self._labels_i_order,] * label.shape[0]).T
+            relative_label = np.apply_along_axis(np.where, 0, labels_i_orders == label)
+        except IndexError:
+            relative_label = np.where(self._labels_i_order == label)
 
-        return img, np.where(self._labels_i_order == label)[0]
+        return relative_label[0][0]
+
+    def __getitem__(self, index: int):
+        if self.get_age:
+            img, age, label = super().__getitem__(self._idx[index])
+
+            return img, age, self.fix_label(label)
+        else:
+            img, label = super().__getitem__(self._idx[index])
+
+            return img, self.fix_label(label)
+
+    def _get_item(self, dataset, index_):
+        with h5py.File(self._fpath, 'r') as h:
+            img = h[dataset]['X'][index_]
+            if self.get_age:
+                age = h[dataset]['a'][index_]
+            label = h[dataset]['y'][index_]
+
+        # transform
+        if self.transform is not None:
+            img = self.transform(img)
+
+        if self.get_age:
+            return img, age, label
+        else:
+            return img, label
 
 class ADNIDatasetKFold(Dataset):
     def __init__(
