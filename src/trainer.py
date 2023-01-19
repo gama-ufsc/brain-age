@@ -6,6 +6,7 @@ import random
 from time import time
 from torchvision import transforms
 from scipy.stats import norm
+from sklearn.metrics import roc_auc_score
 import numpy as np
 
 import torch
@@ -460,7 +461,7 @@ class Trainer():
 
 class ClassificationTrainer(Trainer):
     def __init__(self, net: nn.Module, dataset_fpath: Path, epochs=5, lr=0.01,
-                 optimizer: str = 'Adam', loss_func: str = 'CrossEntropyLoss', h=lambda x: x,
+                 optimizer: str = 'Adam', loss_func: str = 'BCEWithLogitsLoss', h=lambda x: x,
                  lr_scheduler: str = None, lr_scheduler_params: dict = None,
                  batch_size=16, device=None, transforms=transforms.ToTensor(),
                  wandb_project="ADNI-AD-CN", logger=None, split=0,
@@ -490,7 +491,7 @@ class ClassificationTrainer(Trainer):
                 with autocast():
                     p_hat = self.net(X)  # output in probability mass (logits)
 
-                    loss = self._loss_func(p_hat, y)
+                    loss = self._loss_func(p_hat, y.to(p_hat))
 
                 scaler.scale(loss).backward()
 
@@ -513,6 +514,9 @@ class ClassificationTrainer(Trainer):
         per_subject_acc = 0
         n_subjects = 0
 
+        ys = list()
+        y_hats = list()
+
         self.net.eval()
         with torch.set_grad_enabled(False):
             for X, y in self._dataloader['val']:
@@ -522,39 +526,54 @@ class ClassificationTrainer(Trainer):
                 with autocast():
                     p_hat = self.net(X)
 
-                    loss_value = self._loss_func(p_hat, y).item()
+                    loss_value = self._loss_func(p_hat, y.to(p_hat)).item()
 
                 val_loss += loss_value * len(p_hat)  # scales to data size
 
-                y_hat = p_hat.cpu().detach().numpy()
-                y_hat = np.argmax(y_hat, axis=-1)
-                subject_y_hat = np.argmax(np.bincount(y_hat))
-
                 y = y.cpu().detach().numpy()
-                subject_y = np.median(y)
+                ys.append(y)
 
-                val_acc += (y_hat == y).sum()
-                per_subject_acc += int(subject_y_hat == subject_y)
+                y_hat = torch.sigmoid(p_hat).cpu().detach().numpy()
+                y_hats.append(y_hat)
+
                 n_subjects += 1
 
-        # scale to data size
+        # scale loss to data size
         len_data = len(self._dataloader['val'].dataset)
         val_loss = val_loss / len_data
-        val_acc = val_acc / len_data
-        val_ps_acc = per_subject_acc / n_subjects
 
-        return val_loss, val_acc, val_ps_acc
+        y = np.stack(ys)
+        subject_y = y[:,0]
+
+        y_hat = np.stack(y_hats)
+        subject_y_hat = y_hat.mean(axis=-1)
+        
+        val_auc = roc_auc_score(y.flatten(), y_hat.flatten())
+        val_ps_auc = roc_auc_score(subject_y, subject_y_hat)
+
+        # use 1/2 as threshold
+        y_hat = (y_hat > 0.5).astype(int)
+        subject_y_hat = (subject_y_hat > 0.5).astype(int)
+
+        val_acc = (y_hat == y).sum() / len_data
+        val_ps_acc = (subject_y_hat == subject_y).sum() / n_subjects
+
+        return val_loss, val_auc, val_ps_auc, val_acc, val_ps_acc
 
     def log_val_scores(self, train_loss, val_scores):
-        val_loss, val_acc, val_ps_acc = val_scores
+        val_loss, val_auc, val_ps_auc, val_acc, val_ps_acc = val_scores
 
         self.l.info(f"Validation {self.loss_func} = {val_loss}")
         self.l.info(f"Validation Accuracy = {100*val_acc:.2f}%")
         self.l.info(f"Validation Accuracy per subject = {100*val_ps_acc:.2f}%")
+        self.l.info(f"Validation AUC = {100*val_auc:.2f}%")
+        self.l.info(f"Validation AUC per subject = {100*val_ps_auc:.2f}%")
 
         wandb.log({
             "train_loss": train_loss,
             "val_loss": val_loss,
+            "val_auc": val_auc,
+            "val_ps_auc": val_ps_auc,
             "val_acc": val_acc,
             "val_ps_acc": val_ps_acc,
         }, step=self._e, commit=True)
