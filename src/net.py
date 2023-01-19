@@ -6,10 +6,11 @@ from torch import nn
 
 
 def load_from_wandb(net: nn.Module, run_id: str,
-                    project='ADNI-brain-age'):
+                    project='ADNI-brain-age', model_fname='model_last'):
     best_model_file = wandb.restore(
-        'model_best.pth',
+        model_fname+'.pth',
         run_path=f"gama/{project}/{run_id}",
+        replace=True
     )
     net.load_state_dict(torch.load(best_model_file.name))
 
