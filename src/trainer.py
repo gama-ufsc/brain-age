@@ -378,6 +378,12 @@ class Trainer():
                     X = X.unsqueeze(1).repeat((1,n,1,1))  # fix input channels
                 except:
                     pass
+                
+                try:
+                    n = self.net[0].stages[0].in_channels
+                    X = X.repeat((1,n,1,1))  # fix input channels
+                except:
+                    pass
 
                 self._optim.zero_grad()
 
@@ -418,6 +424,12 @@ class Trainer():
                 try:
                     n = self.net.conv1.in_channels
                     X = X.unsqueeze(1).repeat((1,n,1,1))  # fix input channels
+                except:
+                    pass
+                
+                try:
+                    n = self.net[0].stages[0].in_channels
+                    X = X.repeat((1,n,1,1))  # fix input channels
                 except:
                     pass
 
