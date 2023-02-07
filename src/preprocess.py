@@ -6,6 +6,7 @@ from os import remove
 from pathlib import Path
 from shutil import move
 
+import nibabel as nib
 import pandas as pd
 
 from tqdm import tqdm
@@ -13,10 +14,10 @@ from tqdm import tqdm
 from brats.preprocessing.nipype_wrappers import ants_registration, ants_transformation
 
 
-INPUT_ADNI_DIR = Path('/home/jupyter/gama/bruno/data/raw/ADNI23')
-OUTPUT_ADNI_DIR = Path('/home/jupyter/gama/bruno/data/raw/ADNI23_prep')
+INPUT_ADNI_DIR = Path('/home/jupyter/gama/bruno/data/raw/ADNI1')
+OUTPUT_ADNI_DIR = Path('/home/jupyter/gama/bruno/data/interim/ADNI1_4bashyam')
 
-TEMPLATE_FPATH = Path('/home/jupyter/gama/bruno/data/external/SRI24_T1.nii')
+TEMPLATE_FPATH = Path('/home/jupyter/gama/bruno/data/external/MNI152_T1_1mm_brain_LPS_filled.nii.gz')
 
 tmpdir = Path('.tmpdir')
 
@@ -44,7 +45,7 @@ if __name__ == '__main__':
         ages[image_id] = float(meta.find('project').find('subject').find('study').find('subjectAge').text)
         groups[image_id] = meta.find('project').find('subject').find('researchGroup').text
 
-        output_fpath = OUTPUT_ADNI_DIR/f"{subject_id}__{image_id}.nii"
+        output_fpath = OUTPUT_ADNI_DIR/f"{subject_id}__{image_id}.nii.gz"
 
         if output_fpath.exists():
             continue
@@ -62,10 +63,12 @@ if __name__ == '__main__':
             str(tmpdir/'sri24_'),
         )
 
-        move(prep_fpath, output_fpath)
+#         move(prep_fpath, output_fpath)
+        nib.save(nib.load(prep_fpath), output_fpath)
 
         try:
             remove(reg_transform)
+            remove(prep_fpath)
         except FileNotFoundError:
             pass
 
