@@ -9,6 +9,9 @@ from tqdm import tqdm
 from brats.preprocessing.nipype_wrappers import ants_registration, ants_transformation
 
 
+# INPUT_ADNI_DIR = Path('/data/slow/ADNI')
+# OUTPUT_ADNI_DIR = Path('/data/slow/ADNI_prep')
+
 INPUT_ADNI_DIR = Path('/data/slow/ADNI')
 OUTPUT_ADNI_DIR = Path('/data/slow/ADNI_prep')
 

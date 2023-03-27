@@ -242,7 +242,7 @@ class Trainer():
     def prepare_data(self):
         train_data = ADNIDatasetForBraTSModel(
             self.dataset_fpath,
-            dataset='train+val',  # substituir para train quando não for treinar o dataset inteiro
+            dataset='train',  # substituir para train quando não for treinar o dataset inteiro
             transform=self.transforms,
         )
         transforms_ = transforms.ToTensor() if 'slices' in self.dataset_fpath.name else torch.Tensor
@@ -317,8 +317,8 @@ class Trainer():
                 y = y.to(self.device)
 
                 try:
-                    #n = self.net.conv1.in_channels
-                    n=3
+#                     n = self.net.conv1.in_channels
+                    n=1
                     X = X.unsqueeze(1).repeat((1,n,1,1))  # fix input channels
                 except:
                     pass
@@ -361,7 +361,7 @@ class Trainer():
 
                 try:
                     #n = self.net.conv1.in_channels
-                    n=3
+                    n=1
                     X = X.unsqueeze(1).repeat((1,n,1,1))  # fix input channels
                 except:
                     pass

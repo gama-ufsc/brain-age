@@ -17,8 +17,8 @@ import nibabel as nib
 from nibabel.processing import conform
 
 
-PREP_DATA_DIR = Path('/home/bruno-pacheco/brain-age/data/raw/ADNI_prep')
-DATASET_FPATH = Path('/home/bruno-pacheco/brain-age/data/interim/ADNI_slices_fix_2mm_split.hdf5')
+PREP_DATA_DIR = Path('/home/jupyter/data/AIBL/AIBL_dissertacao_prep')
+DATASET_FPATH = Path('/home/jupyter/data/AIBL/AIBL_slices_fix_2mm_split.hdf5')
 
 SPLIT_CSV_FPATH = Path('/home/bruno-pacheco/brain-age/notebooks/dataframe3D.csv')
 

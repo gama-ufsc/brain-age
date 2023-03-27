@@ -281,14 +281,14 @@ class Trainer():
         print('preparing train data')
         train_data = ADNIDatasetForBraTSModel(
             self.dataset_fpath,
-            dataset='train+val',
+            dataset='train',
             transform=self.transforms,
         )
         transforms_ = transforms.ToTensor() if 'slices' in self.dataset_fpath.name else torch.Tensor
         print('len train data', len(train_data)//40)
         # instantiate DataLoaders
         self._dataloader = {
-            'train+val': DataLoader(train_data, batch_size=self.batch_size, shuffle=True),
+            'train': DataLoader(train_data, batch_size=self.batch_size, shuffle=True),
         }
 
     def run(self):
@@ -333,7 +333,7 @@ class Trainer():
         train_loss = 0
         self.net.train()
         with torch.set_grad_enabled(True):
-            for X, y in tqdm(self._dataloader['train+val']):
+            for X, y in tqdm(self._dataloader['train']):
                 X = X.to(self.device)
                 y = y.to(self.device)
 
@@ -364,7 +364,7 @@ class Trainer():
                 self._scheduler.step()
 
         # scale to data size
-        train_loss = train_loss / len(self._dataloader['train+val'].dataset)
+        train_loss = train_loss / len(self._dataloader['train'].dataset)
 
         return train_loss
 
@@ -410,14 +410,14 @@ class ClassificationTrainer(Trainer):
         train_loss = 0
         self.net.train()
         with torch.set_grad_enabled(True):
-            for X, y in tqdm(self._dataloader['train+val']):
+            for X, y in tqdm(self._dataloader['train']):
                 y = self.prep_label(y)
 
                 X = X.to(self.device)
                 y = y.to(self.device)
 
                 try:
-                    n = self.net.conv1.in_channels
+                    n = 3
                     X = X.unsqueeze(1).repeat((1,n,1,1))  # fix input channels
                 except:
                     pass
@@ -440,6 +440,6 @@ class ClassificationTrainer(Trainer):
                 self._scheduler.step()
 
         # scale to data size
-        train_loss = train_loss / len(self._dataloader['train+val'].dataset)
+        train_loss = train_loss / len(self._dataloader['train'].dataset)
 
         return train_loss
