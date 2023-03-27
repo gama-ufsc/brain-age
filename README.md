@@ -8,10 +8,10 @@ The src directory contains two files for preprocessing:
 2. `make_dataset`: performs skull stripping using the HD-BET toolkit and converts images to the .hdf5 format.
 
 ## Trainer
-The `src/trainer`` directory contains two files for training:
+The `src/trainer` directory contains two files for training:
 
 1. `trainer_v1:` for training with images having only 1 channel, and only for the U-Net architecture used in this project.
-2. ``trainer_v2:` for training with images having 3 channels, used for pre-trained architectures in ImageNet.
+2. `trainer_v2:` for training with images having 3 channels, used for pre-trained architectures in ImageNet.
 
 
 The `experiments.py` files contain the training processes used, along with the model configurations.
