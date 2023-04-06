@@ -37,10 +37,11 @@ if __name__ == '__main__':
         dataset='test',
         labels=['CN','MCI','AD'],
     )
+    data_loader = DataLoader(data, batch_size=40, shuffle=False)
 
     h = lambda x: x*25+75
 
-    meta = pd.read_csv(PROJ_ROOT/'runs_meta.csv')
+    meta = pd.read_csv(PROJ_ROOT/'new_runs_meta.csv')
 
     dfs = list()
     for i, run_meta in meta.iterrows():
@@ -55,8 +56,23 @@ if __name__ == '__main__':
             net = torch.load('/home/jupyter/gama/bruno/models/brainseg_model.pt')
             net.pooling = nn.AvgPool2d(3)
         elif 'ResNet50' in run_meta['Group']:
-            net = models.resnet50(pretrained=False)
-            net.fc = nn.Sequential(nn.Linear(2048, 1024), nn.ReLU(), nn.Linear(1024, 1))
+            if 'BraTS' in run_meta['Group']:
+                nnunet_model_fpath = '/home/jupyter/gama/nnUNet/models/nnUNet/2d/Task102_BraTS2020/nnUNetTrainerV2_ResNetUNet__nnUNetPlans_ResNetUNet_v2.1/all_pretrain/model_final_checkpoint.model.pkl'
+                nnunet_trainer = restore_model(nnunet_model_fpath, train=False)
+                nnunet_trainer.initialize(training=False)
+                resnet_encoder = nnunet_trainer.network.encoder
+                resnet_encoder.default_return_skips = False
+                net = nn.Sequential(
+                    resnet_encoder,
+                    nn.AdaptiveAvgPool2d(output_size=(1,1)),
+                    nn.Flatten(1),
+                    nn.Linear(2048, 1024),
+                    nn.ReLU(),
+                    nn.Linear(1024, 1),
+                )
+            else:
+                net = models.resnet50(pretrained=False)
+                net.fc = nn.Sequential(nn.Linear(2048, 1024), nn.ReLU(), nn.Linear(1024, 1))
         elif 'BraTS' in run_meta['Group']:
             net = torch.load(PROJ_ROOT/'models/brats_model.pt')
             net.pooling = nn.AvgPool2d(3)
@@ -69,16 +85,18 @@ if __name__ == '__main__':
         net = load_from_wandb(net, run_meta['ID']).to(device)
         net.eval()
 
-        data_loader = DataLoader(data, batch_size=40, shuffle=False)
-
         age_deltas = list()
         groups = list()
-        data_loader = DataLoader(data, batch_size=40, shuffle=False)
         for X, a, y in tqdm(data_loader):
             with torch.no_grad():
                 X = X.unsqueeze(1)
                 try:
                     n = net.conv1.in_channels
+                    X = X.repeat((1,n,1,1))  # fix input channels
+                except:
+                    pass
+                try:
+                    n = net[0].stages[0].in_channels
                     X = X.repeat((1,n,1,1))  # fix input channels
                 except:
                     pass
@@ -103,4 +121,4 @@ if __name__ == '__main__':
         dfs.append(df)
 
     df = pd.concat(dfs)
-    df.to_csv('preds.csv')
+    df.to_csv('new_preds.csv')

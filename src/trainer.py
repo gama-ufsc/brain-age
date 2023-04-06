@@ -1,3 +1,4 @@
+import pandas as pd
 import os
 import logging
 from pathlib import Path
@@ -5,10 +6,10 @@ import random
 
 from time import time
 from torchvision import transforms
-from scipy.stats import norm
+from scipy.stats import norm, kruskal, f_oneway
 from sklearn.metrics import roc_auc_score
 import numpy as np
-
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -16,11 +17,12 @@ import torch.nn.functional as F
 from tqdm import tqdm
 
 from torch.cuda.amp import autocast, GradScaler
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler, SequentialSampler
+
 import wandb
 from dotenv import load_dotenv, find_dotenv
 
-from src.data import ADNIDataset, ADNIDatasetClassification
+from src.data import ADNIDataset, ADNIDatasetClassification, BraTSDataset
 from src.net import BraTSnnUNet
 
 
@@ -299,8 +301,6 @@ class Trainer():
                 transform=self.transforms,
             )
 
-        transforms_ = transforms.ToTensor() if 'slices' in self.dataset_fpath.name else torch.Tensor
-
         # instantiate DataLoaders
         self._dataloader = {
             'train': DataLoader(train_data, batch_size=self.batch_size,
@@ -354,7 +354,7 @@ class Trainer():
 
     def log_val_scores(self, train_loss, val_scores):
         val_loss, val_MAE, val_ps_MAE = val_scores
-        
+
         self.l.info(f"Validation {self.loss_func} = {val_loss}")
         self.l.info(f"Validation MAE = {val_MAE}")
 
@@ -378,7 +378,7 @@ class Trainer():
                     X = X.unsqueeze(1).repeat((1,n,1,1))  # fix input channels
                 except:
                     pass
-                
+
                 try:
                     n = self.net[0].stages[0].in_channels
                     X = X.repeat((1,n,1,1))  # fix input channels
@@ -470,6 +470,151 @@ class Trainer():
         wandb.save(fname)
 
         return fpath
+
+class BraTSAgeTrainer(Trainer):
+    def prepare_data(self):
+        full_dataset = BraTSDataset()
+        dataset_indices = list(range(len(full_dataset)))
+
+        n_val_slices = int(0.2 * len(full_dataset) / 80) * 80
+        val_indices = dataset_indices[-n_val_slices:]
+        train_indices = dataset_indices[:-n_val_slices]
+
+        if self.split == 'train':
+            train_sampler = SubsetRandomSampler(train_indices)
+        elif self.split == 'train+val':
+            train_sampler = SubsetRandomSampler(dataset_indices)
+
+        val_sampler = SequentialSampler(val_indices)
+
+        # instantiate DataLoaders
+        self._dataloader = {
+            'train': DataLoader(full_dataset, batch_size=self.batch_size, sampler=train_sampler),
+            'val': DataLoader(full_dataset, batch_size=80, sampler=val_sampler),
+        }
+
+class StatisticalAnalysisTrainer(Trainer):
+    def prepare_data(self):
+        if self.split == 'train':
+            stat_dataset = 'val'
+        elif self.split == 'train+val':
+            stat_dataset = 'test'
+
+        full_dataset = ADNIDatasetClassification(
+            project_dir/'data/interim/ADNI123_slices_fix_2mm_split_class.hdf5',
+            get_age=True,
+            dataset=stat_dataset,
+            labels=['CN','MCI','AD'],
+        )
+
+        self._classes_dataloader = DataLoader(full_dataset, batch_size=40, shuffle=False)
+
+        return super().prepare_data()
+
+    def validation_pass(self):
+        val_loss = 0
+        val_MAE = 0
+        per_subject_AE = 0
+        n_subjects = 0
+        
+        age_deltas = list()
+        groups = list()
+
+        self.net.eval()
+        with torch.set_grad_enabled(False):
+            for X, y in self._dataloader['val']:
+                X = X.to(self.device)
+                y = y.to(self.device)
+
+                try:
+                    n = self.net.conv1.in_channels
+                    X = X.unsqueeze(1).repeat((1,n,1,1))  # fix input channels
+                except:
+                    pass
+                
+                try:
+                    n = self.net[0].stages[0].in_channels
+                    X = X.repeat((1,n,1,1))  # fix input channels
+                except:
+                    pass
+
+                with autocast():
+                    y_hat = self.h(self.net(X))
+                    loss_value = self._loss_func(y_hat.view_as(y), y.float()).item()
+
+                val_loss += loss_value * len(y)  # scales to data size
+
+                val_MAE += (y_hat - y).abs().mean().item() * len(y)
+                per_subject_AE += (y_hat.median() - y.median()).abs().item()
+                n_subjects += 1
+            
+            for X, a, y in self._classes_dataloader:
+                X = X.unsqueeze(1).to(self.device)
+
+                try:
+                    n = self.net.conv1.in_channels
+                    X = X.repeat((1,n,1,1))  # fix input channels
+                except:
+                    pass                
+                try:
+                    n = self.net[0].stages[0].in_channels
+                    X = X.repeat((1,n,1,1))  # fix input channels
+                except:
+                    pass
+
+                a_pred = self.h(self.net(X)).detach().cpu()
+
+                age_deltas.append(a_pred.numpy().mean() - a.cpu().numpy().mean())
+                groups.append(y.cpu().numpy().min())
+        age_deltas = np.array(age_deltas)
+        groups = np.array(groups)
+
+        # prepare data
+        df = pd.concat([pd.Series(age_deltas), pd.Series(groups)], axis=1)
+        df.columns = ['Delta', 'Group']
+        df['Group'] = df['Group'].replace({0:'CN', 1:'MCI', 2:'AD'})
+        cn = df[df['Group'] == 'CN']['Delta'].values
+        mci = df[df['Group'] == 'MCI']['Delta'].values
+        ad = df[df['Group'] == 'AD']['Delta'].values
+        val_stats = {
+            'anova_cn_mci_F': f_oneway(cn, mci).statistic,
+            'anova_cn_ad_F': f_oneway(cn, ad).statistic,
+            'anova_mci_ad_F': f_oneway(mci, ad).statistic,
+            'anova_cn_mci': f_oneway(cn, mci).pvalue,
+            'anova_cn_ad': f_oneway(cn, ad).pvalue,
+            'anova_mci_ad': f_oneway(mci, ad).pvalue,
+            'kruskal_cn_mci_H': kruskal(cn, mci).statistic,
+            'kruskal_cn_ad_H': kruskal(cn, ad).statistic,
+            'kruskal_mci_ad_H': kruskal(mci, ad).statistic,
+            'kruskal_cn_mci': kruskal(cn, mci).pvalue,
+            'kruskal_cn_ad': kruskal(cn, ad).pvalue,
+            'kruskal_mci_ad': kruskal(mci, ad).pvalue,
+        }
+
+        # scale to data size
+        len_data = len(self._dataloader['val'].dataset)
+        val_loss = val_loss / len_data
+        val_MAE = val_MAE / len_data
+        val_ps_MAE = per_subject_AE / n_subjects
+
+        return val_loss, val_MAE, val_stats, val_ps_MAE
+
+    def log_val_scores(self, train_loss, val_scores):
+        val_loss, val_MAE, val_stats, val_ps_MAE = val_scores
+
+        self.l.info(f"Validation {self.loss_func} = {val_loss}")
+        self.l.info(f"Validation MAE = {val_MAE}")
+
+        data_to_log = {
+            "train_loss": train_loss,
+            "val_loss": val_loss,
+            "val_MAE": val_MAE,
+            "val_ps_MAE": val_ps_MAE,
+        }
+        for k, v in val_stats.items():
+            data_to_log[k] = v
+
+        wandb.log(data_to_log, step=self._e, commit=True)
 
 class ClassificationTrainer(Trainer):
     def __init__(self, net: nn.Module, dataset_fpath: Path, epochs=5, lr=0.01,

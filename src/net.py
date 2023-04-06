@@ -1,8 +1,8 @@
-from turtle import forward
 import wandb
 
 import torch
 from torch import nn
+from nnunet.training.model_restore import restore_model
 
 
 def load_from_wandb(net: nn.Module, run_id: str,
@@ -15,6 +15,21 @@ def load_from_wandb(net: nn.Module, run_id: str,
     net.load_state_dict(torch.load(best_model_file.name))
 
     return net
+
+def load_nnunet_from_wandb(run_id: str, project='brats-nnunet', model_fname='model_latest'):
+    checkpoint_file = wandb.restore(
+        model_fname+'.model',
+        run_path=f"gama/{project}/{run_id}",
+        replace=True
+    )
+    model_file = wandb.restore(
+        model_fname+'.model.pkl',
+        run_path=f"gama/{project}/{run_id}",
+        replace=True
+    )
+    trainer = restore_model(model_file.name, checkpoint=checkpoint_file.name, train=False)
+
+    return trainer
 
 class DecoderBraTSnnUNet(nn.Module):
     def __init__(self):

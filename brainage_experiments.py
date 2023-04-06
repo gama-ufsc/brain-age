@@ -20,18 +20,11 @@ if __name__ == '__main__':
     s = 'train+val'
 
     for _ in range(n_runs):
-        nnunet_trainer = restore_model('/home/jupyter/gama/nnUNet/models/nnUNet/2d/Task102_BraTS2020/nnUNetTrainerV2_ResNetUNet__nnUNetPlans_ResNetUNet_v2.1/all/model_final_checkpoint.model.pkl', train=False)
+        nnunet_trainer = restore_model('/home/jupyter/gama/bruno/models/maper_checkpoint.model.pkl', train=False)
         nnunet_trainer.initialize(False)
-        resnet_encoder = nnunet_trainer.network.encoder
-        resnet_encoder.default_return_skips = False
-        net = nn.Sequential(
-            resnet_encoder,
-            nn.AdaptiveAvgPool2d(output_size=(1,1)),
-            nn.Flatten(1),
-            nn.Linear(2048, 1024),
-            nn.ReLU(),
-            nn.Linear(1024, 1),
-        )
+        net = BraTSnnUNet(nnunet_trainer.network)
+        net.pooling = nn.AvgPool2d(3)
+        net = load_from_wandb(net, '3v771q7n', 'ADNI-brain-age', model_fname='model_last')
         Trainer(
             net,
             dataset_fpath,
@@ -44,10 +37,38 @@ if __name__ == '__main__':
                 transforms.ToTensor(),
             ]),
             split=s,
-            wandb_group='ADNI23_LR_ResNet50+ImageNet+BraTS',
+            wandb_group='ADNI23_LR_UNet+BraTSAge',
         ).run()
 
-    #     net = torch.load('/home/jupyter/gama/bruno/models/brats_model.pt')
+#         nnunet_model_fpath = '/home/jupyter/gama/nnUNet/models/nnUNet/2d/Task102_BraTS2020/nnUNetTrainerV2_ResNetUNet__nnUNetPlans_ResNetUNet_v2.1/all_pretrain/model_final_checkpoint.model.pkl'
+#         nnunet_trainer = restore_model(nnunet_model_fpath, checkpoint=nnunet_model_fpath[:-4], train=False)
+#         nnunet_trainer.initialize(training=False)
+#         resnet_encoder = nnunet_trainer.network.encoder
+#         resnet_encoder.default_return_skips = False
+#         net = nn.Sequential(
+#             resnet_encoder,
+#             nn.AdaptiveAvgPool2d(output_size=(1,1)),
+#             nn.Flatten(1),
+#             nn.Linear(2048, 1024),
+#             nn.ReLU(),
+#             nn.Linear(1024, 1),
+#         )
+#         Trainer(
+#             net,
+#             dataset_fpath,
+#             epochs=E,
+#             lr=1e-3,
+#             batch_size=64,
+#             lr_scheduler='MultiplicativeLR',
+#             lr_scheduler_params={'lr_lambda': lambda e: 1 - np.exp(5*(e/E - 1))},
+#             transforms=transforms.Compose([
+#                 transforms.ToTensor(),
+#             ]),
+#             split=s,
+#             wandb_group='ADNI23_LR_ResNet50+ImageNet+BraTS',
+#         ).run()
+
+#         net = torch.load('/home/jupyter/gama/bruno/models/brats_model.pt')
 #         nnunet_trainer = restore_model('/home/jupyter/gama/bruno/models/maper_checkpoint.model.pkl', train=False)
 #         nnunet_trainer.initialize(False)
 #         net = BraTSnnUNet(nnunet_trainer.network)

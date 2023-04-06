@@ -4,7 +4,8 @@ from pathlib import Path
 
 import numpy as np
 import torch
-
+import pandas as pd
+import pickle
 from torch.utils.data import Dataset
 from torchvision import transforms
 
@@ -212,5 +213,64 @@ class ADNIDatasetKFold(Dataset):
         # transform
         if self.transform is not None:
             img = self.transform(img)
+
+        return img, label
+
+class BraTSDataset(Dataset):
+    def __init__(
+        self,
+        imgs_dir='/home/jupyter/gama/nnUNet/data/processed/Task102_BraTS2020/nnUNetData_plans_v2.1_2D_stage0/',
+        meta_fpath='/home/jupyter/gama/nnUNet/data/raw/survival_info.csv',
+        plans_fpath='/home/jupyter/gama/nnUNet/data/processed/Task102_BraTS2020/nnUNetPlans_FabiansResUNet_v2.1_plans_2D.pkl',
+        transform=torch.Tensor,
+    ) -> None:
+        super().__init__()
+
+        self.imgs_dir = Path(imgs_dir)
+
+        assert self.imgs_dir.exists()
+
+        self.meta = pd.read_csv(meta_fpath).set_index('Brats20ID')
+        with open(plans_fpath, 'rb') as f:
+            plans = pickle.load(f)
+        self.patch_size = np.array([192, 192])
+
+        self.transform = transform
+
+    def __len__(self):
+        return self.meta.shape[0] * 80
+
+    def __getitem__(self, index: int):
+        lb = 35
+        ub = 115
+        
+        i = index // 80
+        j = index % 80
+
+        img_id = self.meta.iloc[i].name
+        label = float(self.meta.iloc[i]['Age'])
+
+        img_meta_fpath = self.imgs_dir/f"{img_id}.pkl"
+        with open(img_meta_fpath, 'rb') as f:
+            img_meta = pickle.load(f)
+        crop_offset = img_meta['crop_bbox'][0][0]
+
+        full_img_fpath = self.imgs_dir/f"{img_id}.npz"
+        img = np.load(full_img_fpath)['data'][0, 35 - crop_offset + j]
+
+        # transform
+        if self.transform is not None:
+            img = self.transform(img)
+
+        # pad
+        pad = self.patch_size - img.shape
+        pad_left = (pad / 2).astype(int)
+        pad_right = (0.5 + pad / 2).astype(int)
+
+        f_pad = np.empty((pad_left.size + pad_right.size,), dtype=pad_left.dtype)
+        f_pad[0::2] = pad_left
+        f_pad[1::2] = pad_right
+
+        img = torch.nn.functional.pad(img, f_pad.tolist()[::-1]).unsqueeze(0)[:,:192,:192]
 
         return img, label

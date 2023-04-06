@@ -11,11 +11,12 @@ import pandas as pd
 
 from tqdm import tqdm
 
-from brats.preprocessing.nipype_wrappers import ants_registration, ants_transformation
+from brats.preprocessing.nipype_wrappers import ants_registration, ants_transformation, ants_n4bfc
+from brats.preprocessing.hdbet_wrapper import hd_bet
 
 
 INPUT_ADNI_DIR = Path('/home/jupyter/gama/bruno/data/raw/ADNI1')
-OUTPUT_ADNI_DIR = Path('/home/jupyter/gama/bruno/data/interim/ADNI1_4bashyam')
+OUTPUT_ADNI_DIR = Path('/home/jupyter/gama/bruno/data/interim/ADNI1_4peng')
 
 TEMPLATE_FPATH = Path('/home/jupyter/gama/bruno/data/external/MNI152_T1_1mm_brain_LPS_filled.nii.gz')
 
@@ -50,14 +51,21 @@ if __name__ == '__main__':
         if output_fpath.exists():
             continue
 
+        brain_fpath, _ = hd_bet(img_fpath, tmpdir/('brain_'+img_fpath.name.split('.nii')[0]), mode='fast')
+
+        normalized_fpath = ants_n4bfc(
+            str(brain_fpath),
+            str(tmpdir/('n4_'+Path(brain_fpath).name))
+        )
+
         reg_transform, _ = ants_registration(
             str(TEMPLATE_FPATH),
-            str(img_fpath),
+            str(normalized_fpath),
             str(tmpdir/'transf_'),
         )
 
         prep_fpath = ants_transformation(
-            str(img_fpath),
+            str(normalized_fpath),
             str(TEMPLATE_FPATH),
             [reg_transform,],
             str(tmpdir/'sri24_'),
