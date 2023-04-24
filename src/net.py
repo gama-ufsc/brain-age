@@ -16,7 +16,7 @@ def load_from_wandb(net: nn.Module, run_id: str,
 
     return net
 
-def load_nnunet_from_wandb(run_id: str, project='brats-nnunet', model_fname='model_latest'):
+def load_nnunet_from_wandb(run_id: str, project='brats-nnunet', model_fname='model_final_checkpoint'):
     checkpoint_file = wandb.restore(
         model_fname+'.model',
         run_path=f"gama/{project}/{run_id}",

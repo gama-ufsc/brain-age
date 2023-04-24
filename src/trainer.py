@@ -231,6 +231,8 @@ class Trainer():
     def setup_training(self):
         self.l.info('Setting up training')
 
+        self.val_scores_history = list()
+
         Optimizer = eval(f"torch.optim.{self.optimizer}")
         self._optim = Optimizer(
             filter(lambda p: p.requires_grad, self.net.parameters()),
@@ -308,6 +310,13 @@ class Trainer():
             'val': DataLoader(val_data, batch_size=40, shuffle=False),
         }
 
+        test_data = self._Dataset(
+            self.dataset_fpath,
+            dataset='test',
+            transform=self.transforms,
+        )
+        self.test_dataloader = DataLoader(test_data, batch_size=40, shuffle=False)
+
     def run(self):
         if not self._is_initalized:
             self.setup_training()
@@ -337,6 +346,10 @@ class Trainer():
                 self.save_model(name='model_best')
 
                 self.best_val = val_scores[-1]
+                
+                self.l.info(f"Computing test performance")
+                test_scores = self.test_pass()
+                self.log_test_scores(test_scores, model='best')
 
             epoch_end_time = time()
             self.l.info(
@@ -349,11 +362,15 @@ class Trainer():
         self.l.info(f"Saving model")
         self.save_model(name='model_last')
 
+        self.l.info(f"Computing test performance")
+        test_scores = self.test_pass()
+        self.log_test_scores(test_scores, model='last')
+
         wandb.finish()
         self.l.info('Training finished!')
 
     def log_val_scores(self, train_loss, val_scores):
-        val_loss, val_MAE, val_ps_MAE = val_scores
+        val_loss, val_MAE, val_ps_MAE, val_ps_MAE_running_average = val_scores
 
         self.l.info(f"Validation {self.loss_func} = {val_loss}")
         self.l.info(f"Validation MAE = {val_MAE}")
@@ -363,7 +380,18 @@ class Trainer():
             "val_loss": val_loss,
             "val_MAE": val_MAE,
             "val_ps_MAE": val_ps_MAE,
+            "val_ps_MAE_running_average": val_ps_MAE_running_average,
         }, step=self._e, commit=True)
+
+    def log_test_scores(self, test_scores, model='last'):
+        test_loss, test_MAE, test_ps_MAE = test_scores
+
+        wandb.run.summary[model+"test_loss"] = test_loss
+        wandb.run.summary[model+"test_MAE"] = test_MAE
+        wandb.run.summary[model+"test_ps_MAE"] = test_ps_MAE
+
+        self.l.info(f"Test {self.loss_func} = {test_loss}")
+        self.l.info(f"Test MAE = {test_MAE}")
 
     def train_pass(self, scaler):
         train_loss = 0
@@ -374,16 +402,29 @@ class Trainer():
                 y = y.to(self.device)
 
                 try:
-                    n = self.net.conv1.in_channels
-                    X = X.unsqueeze(1).repeat((1,n,1,1))  # fix input channels
+                    n = self.net.brats_encoder[0].blocks[0].conv.in_channels
                 except:
-                    pass
+                    n = 4
 
-                try:
-                    n = self.net[0].stages[0].in_channels
-                    X = X.repeat((1,n,1,1))  # fix input channels
-                except:
-                    pass
+                X = X.repeat((1,n,1,1))  # fix input channels
+
+#                 if isinstance(self.net, BraTSnnUNet):
+#                     # U-Net backbone
+#                     X = X.repeat((1,n,1,1))  # fix input channels
+#                 elif isinstance(self.net, nn.Sequential):
+#                     # ResNet backbone
+                    
+#                 try:
+#                     n = self.net.conv1.in_channels
+#                     X = X.unsqueeze(1).repeat((1,n,1,1))  # fix input channels
+#                 except:
+#                     pass
+
+#                 try:
+#                     n = self.net[0].stages[0].in_channels
+#                     X = X.repeat((1,n,1,1))  # fix input channels
+#                 except:
+#                     pass
 
                 self._optim.zero_grad()
 
@@ -420,18 +461,25 @@ class Trainer():
             for X, y in self._dataloader['val']:
                 X = X.to(self.device)
                 y = y.to(self.device)
-
-                try:
-                    n = self.net.conv1.in_channels
-                    X = X.unsqueeze(1).repeat((1,n,1,1))  # fix input channels
-                except:
-                    pass
                 
                 try:
-                    n = self.net[0].stages[0].in_channels
-                    X = X.repeat((1,n,1,1))  # fix input channels
+                    n = self.net.brats_encoder[0].blocks[0].conv.in_channels
                 except:
-                    pass
+                    n = 4
+
+                X = X.repeat((1,n,1,1))  # fix input channels
+
+#                 try:
+#                     n = self.net.conv1.in_channels
+#                     X = X.unsqueeze(1).repeat((1,n,1,1))  # fix input channels
+#                 except:
+#                     pass
+                
+#                 try:
+#                     n = self.net[0].stages[0].in_channels
+#                     X = X.repeat((1,n,1,1))  # fix input channels
+#                 except:
+#                     pass
 
                 with autocast():
                     y_hat = self.h(self.net(X))
@@ -448,8 +496,49 @@ class Trainer():
         val_loss = val_loss / len_data
         val_MAE = val_MAE / len_data
         val_ps_MAE = per_subject_AE / n_subjects
+        
+        self.val_scores_history.append(val_ps_MAE)
+        window = self.val_scores_history[-5:]
+        val_ps_MAE_running_average = sum(window) / len(window)
 
-        return val_loss, val_MAE, val_ps_MAE
+        return val_loss, val_MAE, val_ps_MAE, val_ps_MAE_running_average
+
+    def test_pass(self):
+        test_loss = 0
+        test_MAE = 0
+        per_subject_AE = 0
+        n_subjects = 0
+
+        self.net.eval()
+        with torch.set_grad_enabled(False):
+            for X, y in self.test_dataloader:
+                X = X.to(self.device)
+                y = y.to(self.device)
+
+                try:
+                    n = self.net.brats_encoder[0].blocks[0].conv.in_channels
+                except:
+                    n = 4
+
+                X = X.repeat((1,n,1,1))  # fix input channels
+
+                with autocast():
+                    y_hat = self.h(self.net(X))
+                    loss_value = self._loss_func(y_hat.view_as(y), y.float()).item()
+
+                test_loss += loss_value * len(y)  # scales to data size
+
+                test_MAE += (y_hat - y).abs().mean().item() * len(y)
+                per_subject_AE += (y_hat.median() - y.median()).abs().item()
+                n_subjects += 1
+
+        # scale to data size
+        len_data = len(self.test_dataloader.dataset)
+        test_loss = test_loss / len_data
+        test_MAE = test_MAE / len_data
+        test_ps_MAE = per_subject_AE / n_subjects
+
+        return test_loss, test_MAE, test_ps_MAE
 
     def save_checkpoint(self):
         checkpoint = {
