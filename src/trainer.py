@@ -231,7 +231,7 @@ class Trainer():
     def setup_training(self):
         self.l.info('Setting up training')
 
-        self.val_scores_history = list()
+        self.val_scores_smooth = 0
 
         Optimizer = eval(f"torch.optim.{self.optimizer}")
         self._optim = Optimizer(
@@ -370,7 +370,7 @@ class Trainer():
         self.l.info('Training finished!')
 
     def log_val_scores(self, train_loss, val_scores):
-        val_loss, val_MAE, val_ps_MAE, val_ps_MAE_running_average = val_scores
+        val_loss, val_MAE, val_ps_MAE, val_scores_smooth = val_scores
 
         self.l.info(f"Validation {self.loss_func} = {val_loss}")
         self.l.info(f"Validation MAE = {val_MAE}")
@@ -380,7 +380,7 @@ class Trainer():
             "val_loss": val_loss,
             "val_MAE": val_MAE,
             "val_ps_MAE": val_ps_MAE,
-            "val_ps_MAE_running_average": val_ps_MAE_running_average,
+            "val_ps_MAE_running_average": val_scores_smooth,
         }, step=self._e, commit=True)
 
     def log_test_scores(self, test_scores, model='last'):
@@ -497,11 +497,13 @@ class Trainer():
         val_MAE = val_MAE / len_data
         val_ps_MAE = per_subject_AE / n_subjects
         
-        self.val_scores_history.append(val_ps_MAE)
-        window = self.val_scores_history[-5:]
-        val_ps_MAE_running_average = sum(window) / len(window)
+        if self._e == 0:
+            self.val_scores_smooth = val_ps_MAE
+        else:
+            # \alpha = 0.5
+            self.val_scores_smooth = (val_ps_MAE + self.val_scores_smooth) / 2
 
-        return val_loss, val_MAE, val_ps_MAE, val_ps_MAE_running_average
+        return val_loss, val_MAE, val_ps_MAE, self.val_scores_smooth
 
     def test_pass(self):
         test_loss = 0
