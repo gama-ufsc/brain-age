@@ -6,19 +6,17 @@ from os import remove
 from pathlib import Path
 from shutil import move
 
-import nibabel as nib
 import pandas as pd
 
 from tqdm import tqdm
 
-from brats.preprocessing.nipype_wrappers import ants_registration, ants_transformation, ants_n4bfc
-from brats.preprocessing.hdbet_wrapper import hd_bet
+from brats.preprocessing.nipype_wrappers import ants_registration, ants_transformation
 
 
-INPUT_ADNI_DIR = Path('/home/jupyter/gama/bruno/data/raw/ADNI1')
-OUTPUT_ADNI_DIR = Path('/home/jupyter/gama/bruno/data/interim/ADNI1_4peng')
+INPUT_ADNI_DIR = Path('/home/jupyter/gama/bruno/data/raw/ADNI23')
+OUTPUT_ADNI_DIR = Path('/home/jupyter/gama/bruno/data/raw/ADNI23_prep')
 
-TEMPLATE_FPATH = Path('/home/jupyter/gama/bruno/data/external/MNI152_T1_1mm_brain_LPS_filled.nii.gz')
+TEMPLATE_FPATH = Path('/home/jupyter/gama/bruno/data/external/SRI24_T1.nii')
 
 tmpdir = Path('.tmpdir')
 
@@ -46,37 +44,28 @@ if __name__ == '__main__':
         ages[image_id] = float(meta.find('project').find('subject').find('study').find('subjectAge').text)
         groups[image_id] = meta.find('project').find('subject').find('researchGroup').text
 
-        output_fpath = OUTPUT_ADNI_DIR/f"{subject_id}__{image_id}.nii.gz"
+        output_fpath = OUTPUT_ADNI_DIR/f"{subject_id}__{image_id}.nii"
 
         if output_fpath.exists():
             continue
 
-        brain_fpath, _ = hd_bet(img_fpath, tmpdir/('brain_'+img_fpath.name.split('.nii')[0]), mode='fast')
-
-        normalized_fpath = ants_n4bfc(
-            str(brain_fpath),
-            str(tmpdir/('n4_'+Path(brain_fpath).name))
-        )
-
         reg_transform, _ = ants_registration(
             str(TEMPLATE_FPATH),
-            str(normalized_fpath),
+            str(img_fpath),
             str(tmpdir/'transf_'),
         )
 
         prep_fpath = ants_transformation(
-            str(normalized_fpath),
+            str(img_fpath),
             str(TEMPLATE_FPATH),
             [reg_transform,],
             str(tmpdir/'sri24_'),
         )
 
-#         move(prep_fpath, output_fpath)
-        nib.save(nib.load(prep_fpath), output_fpath)
+        move(prep_fpath, output_fpath)
 
         try:
             remove(reg_transform)
-            remove(prep_fpath)
         except FileNotFoundError:
             pass
 
