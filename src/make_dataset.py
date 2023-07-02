@@ -22,6 +22,7 @@ from nibabel.processing import conform
 ADNI1_DATA_DIR = Path('/home/jupyter/gama/bruno/data/raw/ADNI1_prep')
 ADNI23_DATA_DIR = Path('/home/jupyter/gama/bruno/data/raw/ADNI23_prep')
 DATASET_FPATH = Path('/home/jupyter/gama/bruno/data/interim/ADNI123_slices_fix_2mm_split_class.hdf5')
+CROSSVAL_FPATH = Path('/home/jupyter/gama/bruno/data/external/CROSSVAL.csv')
 
 labels_order = np.array(['CN', 'EMCI', 'LMCI', 'MCI', 'AD', 'SMC'])
 
@@ -103,7 +104,7 @@ if __name__ == '__main__':
     adni23_fpaths = [fp for fp in adni23_fpaths if groups[fp.name.split('__')[1].rstrip('.nii')] != 'Patient']
 
     # split data
-    df_cv = pd.read_csv('/home/jupyter/gama/bruno/data/external/CROSSVAL.csv')
+    df_cv = pd.read_csv(CROSSVAL_FPATH)
     df_cv = df_cv.set_index('RID')
 
     train_fpaths = adni23_fpaths
