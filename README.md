@@ -1,6 +1,6 @@
 # Pre-training brain age deep learning models
 
-This repository contains the development for the paper "Does pre-training on brain-related tasks results in better deep-learning-based brain age biomarkers?", submitted to BRACIS'23 (citation soon).
+This repository contains the development for the paper "Does pre-training on brain-related tasks results in better deep-learning-based brain age biomarkers?", submitted to BRACIS'23 (citation soon). The slides presented in BRACIS are available in `slides.pdf`.
 
 We use wandb to keep models and results.
 The `train_brainage.py` and `train_brats_models.py` are the basis for reproducing our results.
